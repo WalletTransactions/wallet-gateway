@@ -30,7 +30,7 @@ catch-all `/{proxyPath}`); `/docs` каждого апстрима — по ег
 
 ## Login redirect — через гейтвей целиком, включая сам OAuth callback
 
-Кнопка "Войти" на SPA ([wallet-web](https://github.com/WalletTransactions/wallet-web/tree/main/.)) ведёт на относительный
+Кнопка "Войти" на SPA ([wallet-web](https://github.com/WalletTransactions/wallet-web)) ведёт на относительный
 `/auth/google` — гейтвей сам перенаправит на auth-service. Сам OAuth
 callback Google тоже возвращает браузер СЮДА (`redirect_uri` =
 `REDIRECT_URL` в `.env` google-auth, указывает на
