@@ -1,0 +1,277 @@
+openapi: 3.1.0
+info:
+  title: wallet-gateway
+  version: "1.0.0"
+  description: |
+    Единая внешняя точка входа (порт 8090) — путь-ориентированная
+    маршрутизация к `google-auth`/`wallet-api`/`wallet-report`/`wallet-web`
+    (то же, что в проде решил бы ALB с path-based routing, см.
+    `wallet-gateway/README.md`). У сервиса НЕТ собственных
+    бизнес-операций — эта спецификация описывает саму таблицу маршрутизации
+    и то, что гейтвей делает САМ (грубая проверка JWT на входе, проксирование
+    заголовков/тела, `X-Trace-Id`), а не переописывает контракт апстримов —
+    за их операциями (запрос/ответ) смотрите:
+    - `google-auth/openapi.yaml` — то, что форвардится с `/auth/*` и `/admin/*`;
+    - `wallet-report/openapi.yaml` — то, что форвардится с `/api/reports/*`;
+    - `wallet-api/openapi.yaml` — то, что форвардится с остальным `/api/*` и `/sync/*`.
+
+    **Проксируется без изменений**: метод, путь+query string (`req.target`),
+    тело, все заголовки, КРОМЕ hop-by-hop (`Host`, `Content-Length`,
+    `Connection`, `Transfer-Encoding` — их пересчитывает сам httplib
+    заново на каждом хопе). Исходный `Host` кладётся отдельно в
+    `X-Forwarded-Host` — апстримам он иногда нужен (`google-auth` выбирает
+    по нему `redirect_uri`, см. его README).
+
+    **JWT-гейт** — ТОЛЬКО на `/api/*` (включая `/api/reports/*`) и `/sync/*`:
+    проверяет подпись (RS256 по JWKS `google-auth`, кэшируется) и `exp`, не
+    роль и не claim'ы (это уже дело апстрима). `/auth/*` и `/admin/*` НЕ
+    проверяются здесь вообще — `/auth/*` потому что там САМ вход (закрыть
+    его значило бы, что никто не смог бы залогиниться), `/admin/*` потому
+    что там уже своя ролевая проверка внутри `google-auth`, дублировать её
+    на гейтвее — ничего не выиграть в безопасности.
+servers:
+  # Относительный, не http://localhost:8090: страницу открывают и как
+  # 0.0.0.0:8090, 127.0.0.1:8090, по LAN-IP — абсолютный адрес для браузера
+  # был бы чужим origin'ом, и "Try it out" падал бы по CORS.
+  - url: /
+    description: Этот же адрес — единственный публичный вход стека, порт 8090 (LAN-only на этом этапе, см. org/docs/TODO_mobile_sync.md, 1.4)
+
+# Переиспользуемые куски операций (обычные YAML-якоря — валидная
+# спецификационная расширяемость OpenAPI, но не часть его схемы: любой
+# парсер сначала разворачивает YAML alias'ы, только потом видит чистый
+# JSON-совместимый документ). Объявлены ДО paths — YAML не допускает
+# ссылку на ещё не встретившийся якорь.
+x-gated-proxy-operation: &gatedProxy
+  security: [{bearerAuth: [], sessionCookie: []}]
+  responses:
+    "401":
+      description: |
+        Токен отсутствует, просрочен или подпись не совпала — гейтвей не
+        дошёл до апстрима вообще (только подпись+exp, роль/claim'ы не
+        проверяются здесь).
+      content:
+        text/plain: {schema: {type: string}}
+    "502":
+      description: Апстрим недоступен или не ответил за 10с (connect)/30с (read)
+      content:
+        text/plain: {schema: {type: string}}
+    default:
+      description: |
+        Токен прошёл гейт — запрос форвардится на апстрим как есть (см.
+        summary операции, куда именно), ответ (статус, заголовки, тело)
+        возвращается БЕЗ изменений.
+
+x-open-proxy-operation: &openProxy
+  security: []
+  responses:
+    "502":
+      description: Апстрим недоступен или не ответил за 10с (connect)/30с (read)
+      content:
+        text/plain: {schema: {type: string}}
+    default:
+      description: |
+        Гейтвей не проверяет ничего на этом префиксе — запрос форвардится
+        как есть, ответ возвращается без изменений. Точный контракт — см.
+        openapi.yaml соответствующего апстрима (google-auth для /auth и
+        /admin, wallet-web — статика без своего API).
+
+tags:
+  - name: self
+    description: |
+      /docs, /openapi.yaml и статика /vendor/swagger-ui/* — отдаёт сам
+      гейтвей, НЕ проксирует ни на один апстрим (см. src/docs.cpp,
+      зарегистрировано в main.cpp ДО catch-all /{proxyPath} ниже — иначе
+      эти пути форвардились бы на wallet-web как обычный фолбэк).
+  - name: gated-proxy
+    description: "/api/reports/* (wallet-report), /api/* и /sync/* (wallet-api) — форвардятся апстримам, требуют синтаксически валидный JWT"
+  - name: open-proxy
+    description: "/auth/* и /admin/* — форвардятся на google-auth без проверки на гейтвее"
+  - name: static-fallback
+    description: Всё остальное — форвардится на wallet-web (nginx, статика SPA)
+
+paths:
+  /docs:
+    get:
+      operationId: gatewayDocs
+      summary: "Swagger UI — эта самая страница: своя спека и спеки апстримов выпадающим списком"
+      description: |
+        Выпадающий список в topbar: `wallet-gateway` (по умолчанию, /openapi.yaml)
+        и апстримы — `google-auth`, `wallet-api`, `wallet-report`
+        (/openapi/{name}.yaml). Во всех спеках единственный сервер — "/", так что
+        "Try it out" идёт через гейтвей на тот адрес, с которого открыта страница.
+      tags: [self]
+      security: []
+      responses:
+        "200":
+          description: HTML-страница Swagger UI (вендоренный статический бандл, см. third_party/swagger-ui/README.md)
+          content:
+            text/html: {schema: {type: string}}
+
+  /openapi.yaml:
+    get:
+      operationId: gatewayOpenApiYaml
+      summary: "Эта самая спецификация — файл рядом с исполняемым файлом, отдаётся как есть"
+      tags: [self]
+      security: []
+      responses:
+        "200":
+          description: Текст этого файла
+          content:
+            application/yaml: {schema: {type: string}}
+
+  /openapi/{name}.yaml:
+    get:
+      operationId: gatewayUpstreamOpenApiYaml
+      summary: "Спека апстрима — забирается у него самого (GET <апстрим>/openapi.yaml) на каждый запрос"
+      description: |
+        Отдаётся самим гейтвеем (src/docs.cpp): тянет /openapi.yaml апстрима по
+        внутренней сети и заменяет `servers` на единственный относительный
+        "/" — чтобы "Try it out" в /docs шёл через гейтвей, а не кросс-доменно
+        на прямой порт апстрима (его бы зарубил CORS). Служебные пути апстрима
+        (/healthz, /version, /.well-known/*, /internal/*) гейтвей не
+        проксирует — их пробовать в /docs самого апстрима.
+      tags: [self]
+      security: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google-auth, wallet-api, wallet-report]
+      responses:
+        "200":
+          description: openapi.yaml апстрима с дописанным сервером "/"
+          content:
+            application/yaml: {schema: {type: string}}
+        "404":
+          description: Нет апстрима с таким именем
+          content:
+            text/plain: {schema: {type: string}}
+        "502":
+          description: Апстрим недоступен или не отдал спеку за 3с (connect)/5с (read)
+          content:
+            text/plain: {schema: {type: string}}
+
+  /healthz:
+    get:
+      operationId: gatewayHealthz
+      summary: "Liveness САМОГО гейтвея для docker/podman compose healthcheck (см. wallet-infra/compose.yaml)"
+      description: |
+        Отдаётся самим гейтвеем, НЕ проксирует /healthz апстримов — проверяет
+        только то, что жив сам гейтвей (см. src/docs.cpp, почему).
+      tags: [self]
+      security: []
+      responses:
+        "200":
+          description: Гейтвей жив
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: ok}
+
+  /version:
+    get:
+      operationId: gatewayVersion
+      summary: "Версия ЭТОГО билда гейтвея — проставляется на сборке (см. CMakeLists.txt, VERSION)"
+      description: |
+        Отдаётся самим гейтвеем, НЕ проксирует /version апстримов — та же
+        логика, что и /healthz выше. `version` — semver из `VERSION` рядом с
+        `CMakeLists.txt`; `git_commit` — короткий хэш коммита на момент
+        сборки (`unknown`, если собрано без `--build-arg GIT_COMMIT`, см.
+        Containerfile). Та же тройка полей — в `build_info` внутри
+        `GET /metrics`.
+      tags: [self]
+      security: []
+      responses:
+        "200":
+          description: Версия и git-хэш текущего билда гейтвея
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service: {type: string, example: wallet-gateway}
+                  version: {type: string, example: "0.1.0"}
+                  git_commit: {type: string, example: "a1b2c3d4"}
+
+  /api/reports/{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-report /api/reports/... (см. его openapi.yaml) — проверяется ДО общего /api/{proxyPath} ниже (find_route в main.cpp), иначе тот перехватил бы первым"}
+
+  /api/{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /api/... (см. его openapi.yaml)"}
+    post: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /api/..."}
+    put: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /api/..."}
+    patch: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /api/..."}
+    delete: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /api/..."}
+    options: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /api/..."}
+
+  /sync/{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /sync/pull (см. его openapi.yaml)"}
+    post: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /sync/push"}
+    put: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /sync/..."}
+    patch: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /sync/..."}
+    delete: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /sync/..."}
+    options: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-api /sync/..."}
+
+  /auth/{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    get: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /auth/... (см. его openapi.yaml)"}
+    post: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /auth/..."}
+    put: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /auth/..."}
+    patch: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /auth/..."}
+    delete: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /auth/..."}
+    options: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /auth/..."}
+
+  /admin/{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    get: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /admin/... (см. его openapi.yaml)"}
+    post: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /admin/..."}
+    put: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /admin/..."}
+    patch: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /admin/..."}
+    delete: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /admin/..."}
+    options: {<<: *openProxy, tags: [open-proxy], summary: "Проксируется на google-auth /admin/..."}
+
+  /{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    get:
+      <<: *openProxy
+      tags: [static-fallback]
+      summary: |
+        Фолбэк — статика SPA (wallet-web/nginx); / и любой путь без
+        совпавшего префикса выше. ИСКЛЮЧЕНИЕ: /docs, /openapi.yaml и
+        /vendor/swagger-ui/* сюда не попадают — они зарегистрированы раньше
+        (см. тег self выше) и отдаются самим гейтвеем.
+
+components:
+  parameters:
+    proxyPath:
+      name: proxyPath
+      in: path
+      required: true
+      schema: {type: string}
+      description: |
+        Остаток пути ПОСЛЕ префикса (может содержать вложенные сегменты и
+        query string — гейтвей форвардит `req.target` как есть, без
+        разбора). OpenAPI формально не умеет "жадные" path-параметры —
+        трактуйте `{proxyPath}` как произвольный хвост, а не один сегмент.
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
