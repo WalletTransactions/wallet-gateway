@@ -152,6 +152,9 @@ RouteTarget find_route(const AppState& state, const std::string& path) {
     if (starts_with(path, "/api/reports/")) {
         return {state.wallet_report_api_url, true, "proxy /api/reports/*", "wallet-report"};
     }
+    // /api/ai/* — тоже ДО общего /api/*: LLM-функции (wallet-ai, см.
+    // org/docs/TODO_wallet_ai.md). scope ai:use проверяет сам wallet-ai.
+    if (starts_with(path, "/api/ai/")) return {state.wallet_ai_url, true, "proxy /api/ai/*", "wallet-ai"};
     if (starts_with(path, "/api/")) return {state.wallet_api_url, true, "proxy /api/*", "wallet-api"};
     // /sync/* — POST /sync/push, GET /sync/pull (org/docs/TODO_mobile_sync.md,
     // Фаза 2): тот же upstream, что и /api/*, тот же грубый JWT-гейт (сам
@@ -407,6 +410,8 @@ int main() {
         env_required("WALLET_API_URL", "адрес wallet-api, например http://127.0.0.1:8082"));
     state.wallet_report_api_url = strip_trailing_slash(
         env_required("WALLET_REPORT_API_URL", "адрес wallet-report, например http://127.0.0.1:8084"));
+    state.wallet_ai_url = strip_trailing_slash(
+        env_required("WALLET_AI_URL", "адрес wallet-ai, например http://127.0.0.1:8087"));
     state.wallet_web_url = strip_trailing_slash(
         env_required("WALLET_WEB_URL", "адрес wallet-web (nginx), например http://127.0.0.1:8083"));
     // Тянет JWKS сразу при старте — если auth-сервис ещё не поднят, не
@@ -440,7 +445,8 @@ int main() {
     // GET /openapi.yaml, /openapi/<name>.yaml, /docs, /healthz, статика /vendor/swagger-ui/*
     docsapi::register_routes(svr, {{"google-auth", state.auth_service_url},
                                    {"wallet-api", state.wallet_api_url},
-                                   {"wallet-report", state.wallet_report_api_url}});
+                                   {"wallet-report", state.wallet_report_api_url},
+                                   {"wallet-ai", state.wallet_ai_url}});
 
     auto proxy = [&state](const httplib::Request& req, httplib::Response& res) {
         handle_proxy(state, req, res);

@@ -74,6 +74,11 @@ std::string current_trace_id();
 // клиенту осмысленно (см. db_query_failed в db.cpp); warn — заметили
 // странность, но обработали и продолжили; debug — подробности не для
 // постоянного мониторинга, полезны только при локальной отладке.
+//
+// Минимальный уровень — переменная окружения LOG_LEVEL (error/warn/info/
+// debug), читается один раз при первой записи; строки ниже неё не пишутся
+// вовсе. Не задана или не распознана — debug, то есть пишется всё, как было
+// до появления LOG_LEVEL.
 void error(const std::string& message);
 void warn(const std::string& message);
 void info(const std::string& message);

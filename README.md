@@ -19,6 +19,7 @@ catch-all `/{proxyPath}`); `/docs` каждого апстрима — по ег
 браузер ──> wallet-gateway (:8090, единственный origin)
                 ├─ /auth/*          ──> auth-service    (google-auth, :8080)
                 ├─ /api/reports/*   ──> wallet-report    (read-only, шареная БД, :8084)
+                ├─ /api/ai/*        ──> wallet-ai        (LLM-функции, :8087)
                 ├─ /api/* (прочее)  ──> wallet-api       (кошельки+синк, своя БД, :8082)
                 ├─ /admin/*         ──> auth-service
                 └─ всё остальное    ──> wallet-web (nginx, статика SPA, :8083)
@@ -130,7 +131,7 @@ cp .env.example .env
 ```
 
 - `AUTH_SERVICE_URL` / `WALLET_API_URL` / `WALLET_REPORT_API_URL` /
-  `WALLET_WEB_URL` — адреса реальных сервисов. Никакого общего секрета в
+  `WALLET_AI_URL` / `WALLET_WEB_URL` — адреса реальных сервисов. Никакого общего секрета в
   конфиге — гейтвей сам тянет публичный ключ auth-сервиса с
   `AUTH_SERVICE_URL + /.well-known/jwks.json` (см. "Как убрали общий секрет"
   выше).

@@ -33,6 +33,10 @@ struct AppState {
     // пути первым (порядок регистрации важен, см. find_route).
     std::string wallet_report_api_url;
 
+    // Куда роутить /api/ai/* — LLM-функции (org/docs/TODO_wallet_ai.md).
+    // Тоже ДО общего /api/* в find_route.
+    std::string wallet_ai_url;
+
     // Куда роутить всё остальное (фолбэк по умолчанию) — статика SPA,
     // отдаёт nginx. Раньше здесь был wallet-bff (сервис упразднён при
     // переходе на SPA — см. README wallet-web, "Куда делся wallet-bff").

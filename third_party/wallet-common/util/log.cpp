@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <cstdlib>
 #include <random>
 #include <sstream>
 #include <system_error>
@@ -59,6 +60,25 @@ std::string format(const std::tm& tm, const char* fmt) {
     return oss.str();
 }
 
+// Ранг уровня: чем больше, тем серьёзнее — error=3 ... debug=0.
+int level_rank(const std::string& level) {
+    if (level == "error") return 3;
+    if (level == "warn") return 2;
+    if (level == "info") return 1;
+    return 0;
+}
+
+// Минимальный уровень из LOG_LEVEL (см. log.hpp) — static, читается один раз:
+// окружение процесса после старта не меняется, а getenv на каждую строку лога
+// незачем. Не задана/не распознана — debug (ранг 0), пишется всё.
+int min_level_rank() {
+    static const int rank = [] {
+        const char* v = std::getenv("LOG_LEVEL");
+        return v != nullptr ? level_rank(v) : 0;
+    }();
+    return rank;
+}
+
 // Вызывается под g_mutex, только когда g_use_file уже true. Открывает файл
 // под сегодняшнюю (ЛОКАЛЬНУЮ — это только имя файла для человека на
 // Windows-хосте, не содержимое строки, см. log.hpp) дату, если он ещё не
@@ -86,6 +106,8 @@ void ensure_file_for(const std::string& date) {
 // использовав то же имя ключа.
 void write_line(const std::string& level, const std::string& message,
                  const nlohmann::json* details) {
+    if (level_rank(level) < min_level_rank()) return;
+
     auto now = std::chrono::system_clock::now();
     auto ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() %
@@ -113,12 +135,12 @@ void write_line(const std::string& level, const std::string& message,
     j["msg"] = message;
     // error_handler_t::replace, не strict (умолчание) — details теперь может
     // нести сырое тело HTTP-запроса/ответа (см. debug(..., {"request_body"...})
-    // в set_logger, main.cpp), а оно не обязано быть валидным UTF-8 (гейтвей
-    // проксирует тела как есть, не разбирая Content-Type — например, blob из
-    // wallet-api, — или оборванная многобайтовая последовательность на
-    // границе обрезки). strict уронил бы всю запись лога исключением из-за
-    // одного нетекстового поля; replace просто подставляет U+FFFD на
-    // невалидных байтах, сама строка не теряется.
+    // в set_logger, main.cpp), а оно не обязано быть валидным UTF-8 (не
+    // текстовый Content-Type — например, blob wallet-api, который гейтвей
+    // проксирует как есть, — или оборванная многобайтовая последовательность
+    // на границе обрезки). strict уронил бы
+    // всю запись лога исключением из-за одного нетекстового поля; replace
+    // просто подставляет U+FFFD на невалидных байтах, сама строка не теряется.
     std::string line = j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 
     if (g_use_file) {

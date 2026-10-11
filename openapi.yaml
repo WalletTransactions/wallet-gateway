@@ -13,6 +13,7 @@ info:
     за их операциями (запрос/ответ) смотрите:
     - `google-auth/openapi.yaml` — то, что форвардится с `/auth/*` и `/admin/*`;
     - `wallet-report/openapi.yaml` — то, что форвардится с `/api/reports/*`;
+    - `wallet-ai/openapi.yaml` — то, что форвардится с `/api/ai/*`;
     - `wallet-api/openapi.yaml` — то, что форвардится с остальным `/api/*` и `/sync/*`.
 
     **Проксируется без изменений**: метод, путь+query string (`req.target`),
@@ -83,7 +84,7 @@ tags:
       зарегистрировано в main.cpp ДО catch-all /{proxyPath} ниже — иначе
       эти пути форвардились бы на wallet-web как обычный фолбэк).
   - name: gated-proxy
-    description: "/api/reports/* (wallet-report), /api/* и /sync/* (wallet-api) — форвардятся апстримам, требуют синтаксически валидный JWT"
+    description: "/api/reports/* (wallet-report), /api/ai/* (wallet-ai), /api/* и /sync/* (wallet-api) — форвардятся апстримам, требуют синтаксически валидный JWT"
   - name: open-proxy
     description: "/auth/* и /admin/* — форвардятся на google-auth без проверки на гейтвее"
   - name: static-fallback
@@ -201,6 +202,12 @@ paths:
     parameters:
       - $ref: "#/components/parameters/proxyPath"
     get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-report /api/reports/... (см. его openapi.yaml) — проверяется ДО общего /api/{proxyPath} ниже (find_route в main.cpp), иначе тот перехватил бы первым"}
+
+  /api/ai/{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/... (см. его openapi.yaml) — тоже ДО общего /api/{proxyPath}; в токене нужен aud wallet-ai"}
+    post: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/..."}
 
   /api/{proxyPath}:
     parameters:
