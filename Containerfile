@@ -41,8 +41,9 @@ COPY scripts/ scripts/
 #   ("Error copying file (if different)"), хотя runtime-стадия ниже эту же
 #   openapi.yaml берёт напрямую из контекста, а не из стадии build.
 
+ARG BUILD_JOBS=3
 RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DGIT_COMMIT="${GIT_COMMIT}" \
-    && cmake --build build --config Release -j"$(nproc)"
+    && cmake --build build --config Release -j"${BUILD_JOBS}"
 
 FROM debian:bookworm-slim AS runtime
 
