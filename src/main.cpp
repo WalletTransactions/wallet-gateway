@@ -219,15 +219,12 @@ bool has_valid_token(const httplib::Request& req, jwks::Cache& jwks_cache, const
 
     // iss/aud (org/docs/TODO_telegram_tokens.md, шаг 2): токен должен быть
     // адресован бэкенду маршрута, иначе, например, токен только для
-    // wallet-report прошёл бы гейт на /sync/*. Токен без aud — старый,
-    // пропускается до шага 3.
+    // wallet-report прошёл бы гейт на /sync/*. Токен без aud — старый, с
+    // шага 3 отклоняется.
     jwt_claims::Result claims = jwt_claims::check(*payload, audience, "");
     metrics::inc_counter("jwt_claims_total", "Проверки iss/aud access-токена гейтвеем по результату.", "result",
                          jwt_claims::to_string(claims));
-    if (claims == jwt_claims::Result::Legacy) {
-        applog::warn("access token without aud (legacy), accepted",
-                     {{"event", "jwt_legacy"}, {"sub", payload->value("sub", std::string{})}});
-    } else if (claims != jwt_claims::Result::Ok) {
+    if (claims != jwt_claims::Result::Ok) {
         applog::warn("access token rejected",
                      {{"event", "jwt_rejected"}, {"reason", jwt_claims::to_string(claims)}, {"audience", audience}});
         return false;
