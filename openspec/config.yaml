@@ -1,0 +1,28 @@
+schema: spec-driven
+
+context: |
+  Все артефакты OpenSpec пишутся на русском.
+  wallet-gateway — единственный публичный вход стека (порт 8090): C++17, cpp-httplib,
+  один процесс без своей БД и без бизнес-логики. Маршрутизирует по префиксу пути:
+  /api/reports/* — wallet-report, /api/ai/* — wallet-ai, /api/* и /sync/* — wallet-api,
+  /auth/* и /admin/* — google-auth, всё остальное — wallet-web (nginx, статика SPA).
+  На /api/* и /sync/* — грубый JWT-гейт: подпись RS256 по JWKS google-auth, exp,
+  iss и aud маршрута. Роли и scope гейтвей не проверяет — это дело апстрима;
+  токен уходит апстриму как есть, доверенных X-User-* заголовков нет.
+  Новое поведение апстрима (эндпоинт, поле, scope) делается в репозитории того
+  сервиса; здесь — только маршрут и ссылка на его openapi.yaml.
+  Общий код (util/: jwks, jwt, jwt_claims, log, metrics, dotenv) — копия wallet-common
+  в third_party/wallet-common/, правится в wallet-common и копируется scripts/vendor.sh.
+  LAN-only MVP: никаких внешних запросов; Swagger UI вендорен в third_party/swagger-ui/.
+  Сборка — Docker (Containerfile, BUILD_JOBS=3), по одному C++-сервису за раз.
+
+rules:
+  specs:
+    - Не дублировать контракты апстримов — ссылаться на openapi.yaml сервиса
+    - Каждое требование — с хотя бы одним сценарием WHEN/THEN
+    - Коды ответа, заголовки и тексты ошибок самого гейтвея приводить дословно
+  design:
+    - Явно указывать, нужна ли правка в другом сервисе (google-auth, wallet-api, wallet-report, wallet-ai, wallet-web, wallet-infra) или в wallet-common
+  tasks:
+    - Юнит-тестов у гейтвея нет — каждая задача заканчивается проверкой curl через гейтвей на живом стеке
+    - Изменение маршрута или ответа гейтвея сопровождается правкой openapi.yaml и README.md
