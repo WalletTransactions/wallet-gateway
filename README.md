@@ -124,6 +124,10 @@ cpp-httplib вызывает `pre_routing_handler` **до** чтения тел�
 "Версия" (файл `VERSION` + git-хэш, откуда берутся, как проставляются на
 билде — код и приём идентичны).
 
+Релиз — git-тегами: `vX.Y.Z-rc.N` публикует образ в ghcr и выкатывает его
+в test, `vX.Y.Z` на том же коммите — тот же образ в prod; `X.Y.Z` должен
+совпадать с `VERSION`. Подробно — [README google-auth, «Версия»](https://github.com/WalletTransactions/google-auth#версия), «Релиз».
+
 ## Конфигурация
 
 ```bash
