@@ -4,7 +4,7 @@ info:
   version: "1.0.0"
   description: |
     Единая внешняя точка входа (порт 8090) — путь-ориентированная
-    маршрутизация к `google-auth`/`wallet-api`/`wallet-report`/`wallet-web`
+    маршрутизация к `google-auth`/`wallet-api`/`wallet-report`/`wallet-ai`/`wallet-mcp`/`wallet-web`
     (то же, что в проде решил бы ALB с path-based routing, см.
     `wallet-gateway/README.md`). У сервиса НЕТ собственных
     бизнес-операций — эта спецификация описывает саму таблицу маршрутизации
@@ -14,6 +14,8 @@ info:
     - `google-auth/openapi.yaml` — то, что форвардится с `/auth/*` и `/admin/*`;
     - `wallet-report/openapi.yaml` — то, что форвардится с `/api/reports/*`;
     - `wallet-ai/openapi.yaml` — то, что форвардится с `/api/ai/*`;
+    - `wallet-mcp` (MCP Streamable HTTP, JSON-RPC; контракт — в репозитории
+      wallet-mcp, `openspec/specs`) — то, что форвардится с `/api/mcp/*`;
     - `wallet-api/openapi.yaml` — то, что форвардится с остальным `/api/*` и `/sync/*`.
 
     **Проксируется без изменений**: метод, путь+query string (`req.target`),
@@ -23,9 +25,12 @@ info:
     `X-Forwarded-Host` — апстримам он иногда нужен (`google-auth` выбирает
     по нему `redirect_uri`, см. его README).
 
-    **JWT-гейт** — ТОЛЬКО на `/api/*` (включая `/api/reports/*`) и `/sync/*`:
+    **JWT-гейт** — ТОЛЬКО на `/api/*` (включая `/api/reports/*` и
+    `/api/ai/*`, кроме `/api/mcp/*`) и `/sync/*`:
     проверяет подпись (RS256 по JWKS `google-auth`, кэшируется) и `exp`, не
-    роль и не claim'ы (это уже дело апстрима). `/auth/*` и `/admin/*` НЕ
+    роль и не claim'ы (это уже дело апстрима). `/api/mcp/*` НЕ проверяется:
+    MCP-клиент предъявляет непрозрачный токен `wmcp_…`, его проверяет сам
+    wallet-mcp (`Authorization`/`Cookie` уходят как есть). `/auth/*` и `/admin/*` НЕ
     проверяются здесь вообще — `/auth/*` потому что там САМ вход (закрыть
     его значило бы, что никто не смог бы залогиниться), `/admin/*` потому
     что там уже своя ролевая проверка внутри `google-auth`, дублировать её
@@ -84,9 +89,9 @@ tags:
       зарегистрировано в main.cpp ДО catch-all /{proxyPath} ниже — иначе
       эти пути форвардились бы на wallet-web как обычный фолбэк).
   - name: gated-proxy
-    description: "/api/reports/* (wallet-report), /api/ai/* (wallet-ai), /api/* и /sync/* (wallet-api) — форвардятся апстримам, требуют синтаксически валидный JWT"
+    description: "/api/reports/* (wallet-report), /api/ai/* (wallet-ai), /api/* и /sync/* (wallet-api) — форвардятся апстримам, требуют синтаксически валидный JWT. Незакрытые префиксы: /api/mcp/* (wallet-mcp, единственное исключение внутри /api/*), /auth/* и /admin/* — см. тег open-proxy"
   - name: open-proxy
-    description: "/auth/* и /admin/* — форвардятся на google-auth без проверки на гейтвее"
+    description: "/api/mcp/* — форвардится на wallet-mcp, /auth/* и /admin/* — на google-auth; без проверки токена на гейтвее"
   - name: static-fallback
     description: Всё остальное — форвардится на wallet-web (nginx, статика SPA)
 
@@ -208,6 +213,21 @@ paths:
       - $ref: "#/components/parameters/proxyPath"
     get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/... (см. его openapi.yaml) — тоже ДО общего /api/{proxyPath}; в токене нужен aud wallet-ai"}
     post: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/..."}
+
+  /api/mcp/{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    post:
+      <<: *openProxy
+      tags: [open-proxy]
+      summary: "Проксируется на wallet-mcp /api/mcp/... БЕЗ JWT-гейта — тоже ДО общего /api/{proxyPath}"
+      description: |
+        MCP Streamable HTTP (JSON-RPC в POST, ответ — обычный JSON).
+        Гейтвей токен НЕ проверяет: `Authorization: Bearer wmcp_…` (или JWT)
+        уходит апстриму как есть, без запроса с токеном wallet-mcp сам
+        отвечает `401`. Контракт — в репозитории wallet-mcp (`openspec/specs`).
+        `/api/mcp` без завершающего `/` сюда НЕ попадает — совпадает только
+        с общим `/api/{proxyPath}` и получает `401` гейта.
 
   /api/{proxyPath}:
     parameters:
