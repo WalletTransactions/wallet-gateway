@@ -139,6 +139,13 @@ struct RouteTarget {
 //    wallet-api) — гейт на гейтвее проверяет только подпись+exp, не роль,
 //    так что дублировать эту проверку тут значило бы просто продублировать
 //    JWT-верификацию, ничего не выиграв в безопасности.
+// /api/mcp/* — единственное исключение ВНУТРИ /api/*: MCP-клиент
+// (LM Studio и т.п.) предъявляет не JWT, а персональный непрозрачный токен
+// wmcp_… (статичный заголовок в mcp.json, обновлять 15-минутный JWT клиент
+// не умеет). Гейт отклонил бы его с 401 раньше, чем запрос дошёл бы до
+// wallet-mcp, а учить гейтвей форматам токенов конкретного сервиса незачем
+// — токен как есть уходит в wallet-mcp, тот сам меняет его на короткий JWT
+// в google-auth и отвечает 401 на всё без токена.
 // /api/* — единственное место, где грубая проверка на входе оправдана:
 // это чистый JSON REST, 401 тут — штатный, ожидаемый ответ (см.
 // wallet::require_auth в wallet-api — гейтвей просто отсекает то же
@@ -155,6 +162,10 @@ RouteTarget find_route(const AppState& state, const std::string& path) {
     // /api/ai/* — тоже ДО общего /api/*: LLM-функции (wallet-ai, см.
     // org/docs/TODO_wallet_ai.md). scope ai:use проверяет сам wallet-ai.
     if (starts_with(path, "/api/ai/")) return {state.wallet_ai_url, true, "proxy /api/ai/*", "wallet-ai"};
+    // /api/mcp/* — ДО общего /api/* и БЕЗ гейта (require_jwt = false, aud
+    // пуст), см. комментарий над find_route. /api/mcp без слеша сюда не
+    // попадает — уходит в общий /api/ и получает 401 гейта.
+    if (starts_with(path, "/api/mcp/")) return {state.wallet_mcp_url, false, "proxy /api/mcp/*"};
     if (starts_with(path, "/api/")) return {state.wallet_api_url, true, "proxy /api/*", "wallet-api"};
     // /sync/* — POST /sync/push, GET /sync/pull (org/docs/TODO_mobile_sync.md,
     // Фаза 2): тот же upstream, что и /api/*, тот же грубый JWT-гейт (сам
@@ -409,6 +420,8 @@ int main() {
         env_required("WALLET_REPORT_API_URL", "адрес wallet-report, например http://127.0.0.1:8084"));
     state.wallet_ai_url = strip_trailing_slash(
         env_required("WALLET_AI_URL", "адрес wallet-ai, например http://127.0.0.1:8087"));
+    state.wallet_mcp_url = strip_trailing_slash(
+        env_required("WALLET_MCP_URL", "адрес wallet-mcp, например http://127.0.0.1:8088"));
     state.wallet_web_url = strip_trailing_slash(
         env_required("WALLET_WEB_URL", "адрес wallet-web (nginx), например http://127.0.0.1:8083"));
     // Тянет JWKS сразу при старте — если auth-сервис ещё не поднят, не
@@ -514,6 +527,7 @@ int main() {
                  std::to_string(port) +
                  " (auth: " + state.auth_service_url + ", wallet-api: " + state.wallet_api_url +
                  ", wallet-report: " + state.wallet_report_api_url +
+                 ", wallet-ai: " + state.wallet_ai_url + ", wallet-mcp: " + state.wallet_mcp_url +
                  ", web: " + state.wallet_web_url + ")" +
                  (log_dir.empty() ? "" : " (логи: " + log_dir + "/)"));
     if (!svr.listen(host, port)) {
