@@ -37,6 +37,12 @@ struct AppState {
     // Тоже ДО общего /api/* в find_route.
     std::string wallet_ai_url;
 
+    // Куда роутить /api/mcp/* — MCP-сервер для LLM-клиентов (wallet-mcp).
+    // Тоже ДО общего /api/* в find_route, и единственный префикс внутри
+    // /api/*, где гейтвей НЕ проверяет токен: клиент предъявляет
+    // непрозрачный wmcp_…, его проверяет сам wallet-mcp.
+    std::string wallet_mcp_url;
+
     // Куда роутить всё остальное (фолбэк по умолчанию) — статика SPA,
     // отдаёт nginx. Раньше здесь был wallet-bff (сервис упразднён при
     // переходе на SPA — см. README wallet-web, "Куда делся wallet-bff").
