@@ -31,6 +31,7 @@
 #include "util/log.hpp"
 #include "util/metrics.hpp"
 #include "version.hpp"
+#include "versions.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -215,7 +216,15 @@ std::string extract_cookie(const httplib::Request& req, const std::string& name)
     return {};
 }
 
-bool has_valid_token(const httplib::Request& req, jwks::Cache& jwks_cache, const std::string& audience) {
+// Тело 401 JWT-гейта — одно для проксируемых путей и для /api/versions.
+constexpr const char* kUnauthorizedBody =
+    "gateway: access-токен отсутствует, просрочен или подпись не совпала — "
+    "войдите через /auth/google (или обновите его через /auth/refresh) и повторите запрос";
+
+// payload_out — проверенный payload токена, если он нужен вызывающему (роль
+// для собственного пути GET /api/versions); для проксируемых путей не нужен.
+bool has_valid_token(const httplib::Request& req, jwks::Cache& jwks_cache, const std::string& audience,
+                     nlohmann::json* payload_out = nullptr) {
     std::string token = extract_bearer(req);
     if (token.empty()) token = extract_cookie(req, "session");
     if (token.empty()) return false;
@@ -248,6 +257,7 @@ bool has_valid_token(const httplib::Request& req, jwks::Cache& jwks_cache, const
     // try/catch — value() ниже не бросает, вернёт пустую строку, если поля
     // нет.
     applog::set_user(payload->value("sub", std::string{}));
+    if (payload_out != nullptr) *payload_out = std::move(*payload);
     return true;
 }
 
@@ -364,6 +374,27 @@ httplib::Server::HandlerResponse handle_pre_routing(AppState& state, const httpl
     applog::start_request_timer(); // как можно раньше — считаем весь запрос, не только роутинг
     ensure_trace_id(req, res);
 
+    // Собственный путь гейтвея внутри /api/ — сводка версий (versions.cpp).
+    // Тот же JWT-гейт, что у /api/* (aud wallet-api), плюс роль admin: у пути
+    // нет апстрима, который проверил бы её сам. Прошёл — Unhandled, дальше
+    // отвечает svr.Get("/api/versions"), зарегистрированный до catch-all.
+    // Остальные методы на этом пути идут по общей таблице (в wallet-api).
+    if (req.path == "/api/versions" && (req.method == "GET" || req.method == "HEAD")) {
+        applog::set_route("GET /api/versions");
+        nlohmann::json payload;
+        if (!has_valid_token(req, *state.jwks, "wallet-api", &payload)) {
+            res.status = 401;
+            res.set_content(kUnauthorizedBody, "text/plain; charset=utf-8");
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        if (payload.value("role", std::string{}) != "admin") {
+            res.status = 403;
+            res.set_content("gateway: сводка версий доступна только роли admin", "text/plain; charset=utf-8");
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
+    }
+
     RouteTarget route = find_route(state, req.path);
     applog::set_route(route.route_label); // грубая категория — см. RouteTarget/find_route выше
     if (!route.require_jwt || has_valid_token(req, *state.jwks, route.audience)) {
@@ -371,10 +402,7 @@ httplib::Server::HandlerResponse handle_pre_routing(AppState& state, const httpl
     }
 
     res.status = 401;
-    res.set_content(
-        "gateway: access-токен отсутствует, просрочен или подпись не совпала — "
-        "войдите через /auth/google (или обновите его через /auth/refresh) и повторите запрос",
-        "text/plain; charset=utf-8");
+    res.set_content(kUnauthorizedBody, "text/plain; charset=utf-8");
     return httplib::Server::HandlerResponse::Handled;
 }
 
@@ -409,7 +437,8 @@ int main() {
 
     // build_info для /metrics (см. util/metrics.cpp) — один раз здесь, до
     // svr.listen() (см. GET /version, docs.cpp — та же тройка полей).
-    metrics::set_build_info(version::kService, version::kVersion, version::kGitCommit);
+    metrics::set_build_info(version::kService, version::kVersion, version::kBuild,
+                            version::kGitCommit);
 
     AppState state;
     state.auth_service_url = strip_trailing_slash(
@@ -424,6 +453,9 @@ int main() {
         env_required("WALLET_MCP_URL", "адрес wallet-mcp, например http://127.0.0.1:8088"));
     state.wallet_web_url = strip_trailing_slash(
         env_required("WALLET_WEB_URL", "адрес wallet-web (nginx), например http://127.0.0.1:8083"));
+    // Необязательный: только для сводки GET /api/versions. В find_route бота
+    // нет — через гейтвей он не публикуется.
+    state.wallet_telegram_url = strip_trailing_slash(env_or("WALLET_TELEGRAM_URL", ""));
     // Тянет JWKS сразу при старте — если auth-сервис ещё не поднят, не
     // фатально: залогируется ошибка, первый реальный запрос на защищённый
     // префикс попробует обновить кэш ещё раз (см. jwks::Cache::find).
@@ -457,6 +489,19 @@ int main() {
                                    {"wallet-api", state.wallet_api_url},
                                    {"wallet-report", state.wallet_report_api_url},
                                    {"wallet-ai", state.wallet_ai_url}});
+
+    // GET /api/versions — тоже до catch-all; доступ проверен в
+    // handle_pre_routing. Порядок — порядок строк в сводке.
+    std::vector<versions::Target> version_targets = {{"google-auth", state.auth_service_url},
+                                                     {"wallet-api", state.wallet_api_url},
+                                                     {"wallet-report", state.wallet_report_api_url},
+                                                     {"wallet-ai", state.wallet_ai_url},
+                                                     {"wallet-mcp", state.wallet_mcp_url}};
+    if (!state.wallet_telegram_url.empty()) {
+        version_targets.push_back({"wallet-telegram", state.wallet_telegram_url});
+    }
+    version_targets.push_back({"wallet-web", state.wallet_web_url});
+    versions::register_route(svr, std::move(version_targets));
 
     auto proxy = [&state](const httplib::Request& req, httplib::Response& res) {
         handle_proxy(state, req, res);
@@ -522,13 +567,15 @@ int main() {
         applog::clear_request_context();
     });
 
-    applog::info("wallet-gateway v" + std::string(version::kVersion) + " (" +
+    applog::info("wallet-gateway v" + std::string(version::kBuild) + " (" +
                  std::string(version::kGitCommit) + ") listening on http://" + host + ":" +
                  std::to_string(port) +
                  " (auth: " + state.auth_service_url + ", wallet-api: " + state.wallet_api_url +
                  ", wallet-report: " + state.wallet_report_api_url +
                  ", wallet-ai: " + state.wallet_ai_url + ", wallet-mcp: " + state.wallet_mcp_url +
-                 ", web: " + state.wallet_web_url + ")" +
+                 ", web: " + state.wallet_web_url +
+                 (state.wallet_telegram_url.empty() ? "" : ", telegram (только версия): " + state.wallet_telegram_url) +
+                 ")" +
                  (log_dir.empty() ? "" : " (логи: " + log_dir + "/)"));
     if (!svr.listen(host, port)) {
         applog::error("не удалось запустить сервер на " + host + ":" + std::to_string(port) +
