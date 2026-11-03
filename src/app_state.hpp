@@ -47,4 +47,9 @@ struct AppState {
     // отдаёт nginx. Раньше здесь был wallet-bff (сервис упразднён при
     // переходе на SPA — см. README wallet-web, "Куда делся wallet-bff").
     std::string wallet_web_url;
+
+    // wallet-telegram — НЕ маршрут: только адрес для опроса его /version в
+    // сводке GET /api/versions. Пусто (WALLET_TELEGRAM_URL не задан) — бота
+    // в сводке нет.
+    std::string wallet_telegram_url;
 };

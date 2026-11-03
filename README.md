@@ -142,7 +142,29 @@ cpp-httplib вызывает `pre_routing_handler` **до** чтения тел�
 `/healthz` выше), строка лога при старте и `build_info` в `GET /metrics` —
 общая схема для всех 4 C++-сервисов проекта, см. README google-auth,
 "Версия" (файл `VERSION` + git-хэш, откуда берутся, как проставляются на
-билде — код и приём идентичны).
+билде — код и приём идентичны). Там же — `build` (тег образа из
+`--build-arg APP_BUILD`) и `started_at` (время запуска) в `GET /version`.
+
+### Сводка версий: `GET /api/versions`
+
+Собственный путь гейтвея внутри `/api/` (`src/versions.cpp`), в wallet-api не
+уходит. Доступ — токен как на `/api/*` (`aud` `wallet-api`) **и** роль
+`admin` из claim'а `role`: без токена — `401` с текстом JWT-гейта, с ролью
+`user` — `403` `gateway: сводка версий доступна только роли admin`. Роль
+гейтвей проверяет, хотя для проксируемых путей это дело апстрима (см. «Почему
+не дублируем авторизацию»): у этого пути апстрима нет.
+
+Ответ — `{"checked_at", "services": [...]}`, `Cache-Control: no-store`:
+первым — свой `/version`, дальше `/version` google-auth, wallet-api,
+wallet-report, wallet-ai, wallet-mcp, wallet-telegram (если задан
+`WALLET_TELEGRAM_URL`), wallet-web — как есть. Опрос параллельный, по
+секунде на соединение и на чтение; не ответивший сервис —
+`{"service", "error": "timeout"|"unreachable"|"bad_response"}`, а сводка всё
+равно `200`. Её показывает бейдж версии в углу веба.
+
+```bash
+curl -s -b "session=<access-токен админа>" http://localhost:8091/api/versions | jq
+```
 
 Релиз — git-тегами: `vX.Y.Z-rc.N` публикует образ в ghcr и выкатывает его
 в test, `vX.Y.Z` на том же коммите — тот же образ в prod; `X.Y.Z` должен
@@ -163,6 +185,10 @@ cp .env.example .env
   конфиге — гейтвей сам тянет публичный ключ auth-сервиса с
   `AUTH_SERVICE_URL + /.well-known/jwks.json` (см. "Как убрали общий секрет"
   выше).
+- `WALLET_TELEGRAM_URL` — необязательный адрес wallet-telegram
+  (`http://wallet-telegram:8086` в compose), только для опроса его
+  `/version` в сводке `GET /api/versions`. Маршрута в бота нет и не
+  появляется; не задан — бота в сводке нет.
 - `PORT` — порт самого гейтвея (по умолчанию `8090`) — **это и есть** тот
   адрес, который стоит открывать в браузере вместо `8080`/`8082`/`8083`.
 
