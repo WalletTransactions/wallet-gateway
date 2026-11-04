@@ -167,14 +167,20 @@ void handle_metrics(const httplib::Request&, httplib::Response& res) {
 // Без авторизации — как и /healthz, /metrics: внутренняя диагностическая
 // ручка, не часть публичного API.
 void handle_version(const httplib::Request&, httplib::Response& res) {
-    nlohmann::json j;
-    j["service"] = version::kService;
-    j["version"] = version::kVersion;
-    j["git_commit"] = version::kGitCommit;
-    res.set_content(j.dump(), "application/json; charset=utf-8");
+    res.set_content(version_json().dump(), "application/json; charset=utf-8");
 }
 
 } // namespace
+
+nlohmann::json version_json() {
+    nlohmann::json j;
+    j["service"] = version::kService;
+    j["version"] = version::kVersion;
+    j["build"] = version::kBuild;
+    j["git_commit"] = version::kGitCommit;
+    j["started_at"] = metrics::started_at_iso();
+    return j;
+}
 
 void register_routes(httplib::Server& svr, std::vector<UpstreamSpec> upstreams) {
     svr.Get("/openapi.yaml", handle_openapi_yaml);

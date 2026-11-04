@@ -24,7 +24,7 @@
 - [x] 3.1 На test-контуре с wallet-mcp и персональным токеном пройти `initialize` и `tools/list` через `http://<хост>:8091/api/mcp/`. Проверка: curl возвращает список инструментов, а в журнале гейтвея у запроса метка маршрута `proxy /api/mcp/*`.
   Итог 2026-11-02: initialize и tools/list через :8091/api/mcp/ — 200, 6 инструментов; в журнале гейтвея route = proxy /api/mcp/*. НАЙДЕНО: debug-строка request_body пишет для /api/mcp/ тела запроса И ответа (суммы, категории, комментарии из инструментов) — нарушение D13 wallet-mcp; исправить до выката гейтвея в prod (исключить /api/mcp/ из логирования тел).
   Исправлено 2026-11-04 (локально, не выкачено): тела пишутся только при `LOG_BODIES=1`, а `/auth/*` и `/api/mcp/*` — никогда. Проверено контейнером: без флага и с `LOG_BODIES=1` в `request_body` для `POST /api/mcp/` только `request_bytes`/`response_bytes`.
-- [ ] 3.2 Остановить wallet-mcp и повторить `POST /api/mcp/`. Проверка: ответ `502` с телом `gateway: сервис недоступен`, в журнале `upstream http://wallet-mcp:8088 недоступен (…) для POST /api/mcp/`.
+- [x] 3.2 Остановить wallet-mcp и повторить `POST /api/mcp/`. Проверка: ответ `502` с телом `gateway: сервис недоступен`, в журнале `upstream http://wallet-mcp:8088 недоступен (…) для POST /api/mcp/`. — Тест: [wallet-gateway#3](https://github.com/WalletTransactions/wallet-gateway/issues/3) — проверено 2026-11-02 на test: 502, тело и журнал как в спеке
 
 ## Workflow follow-up
 

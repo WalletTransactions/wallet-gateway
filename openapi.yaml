@@ -202,6 +202,58 @@ paths:
                   service: {type: string, example: wallet-gateway}
                   version: {type: string, example: "0.1.0"}
                   git_commit: {type: string, example: "a1b2c3d4"}
+                  build: {type: string, example: "0.1.1-rc.2", description: "Тег образа (--build-arg APP_BUILD); сборка без него — <VERSION>-dev"}
+                  started_at: {type: string, format: date-time, example: "2026-11-03T19:24:28Z", description: "Время запуска процесса, UTC"}
+
+  /api/versions:
+    get:
+      operationId: serviceVersions
+      summary: "Сводка версий сервисов контура — отвечает сам гейтвей, только роли admin"
+      description: |
+        Собственный путь гейтвея внутри `/api/` (в wallet-api не уходит; другие
+        методы на этом пути — по общей таблице, в wallet-api). Токен проверяется
+        как на `/api/*` (`aud` = `wallet-api`), плюс claim `role` = `admin`.
+
+        `services`: первым — `/version` самого гейтвея, затем `GET /version`
+        апстримов в порядке google-auth, wallet-api, wallet-report, wallet-ai,
+        wallet-mcp, wallet-telegram (только если задан `WALLET_TELEGRAM_URL`),
+        wallet-web. Ответ апстрима — как есть. Опрос параллельный, на каждый
+        сервис — 1 с на соединение и 1 с на чтение; не ответивший сервис —
+        `{"service", "error"}`, где `error` — `timeout`, `unreachable` или
+        `bad_response` (не 200 или не JSON-объект); сводка при этом — 200.
+      tags: [self]
+      security: [{bearerAuth: [], sessionCookie: []}]
+      responses:
+        "200":
+          description: Сводка версий
+          headers:
+            Cache-Control: {schema: {type: string, example: no-store}}
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checked_at: {type: string, format: date-time, example: "2026-11-03T20:15:02Z"}
+                  services:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        service: {type: string, example: wallet-api}
+                        version: {type: string, example: "0.1.1"}
+                        build: {type: string, example: "0.1.1-rc.3"}
+                        git_commit: {type: string, example: "a1b2c3d4"}
+                        started_at: {type: string, format: date-time, example: "2026-11-03T19:24:28Z"}
+                        error: {type: string, enum: [timeout, unreachable, bad_response], description: "Только у не ответившего сервиса — вместо остальных полей, кроме service"}
+        "401":
+          description: Токен отсутствует, просрочен, подпись не совпала или `aud` не `wallet-api` — тот же текст, что у JWT-гейта
+          content:
+            text/plain: {schema: {type: string}}
+        "403":
+          description: Токен валиден, но роль не `admin`
+          content:
+            text/plain:
+              schema: {type: string, example: "gateway: сводка версий доступна только роли admin"}
 
   /api/reports/{proxyPath}:
     parameters:

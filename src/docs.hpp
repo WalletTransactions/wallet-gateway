@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "httplib.h"
+#include "nlohmann/json.hpp"
 
 namespace docsapi {
 
@@ -36,5 +37,9 @@ struct UpstreamSpec {
 };
 
 void register_routes(httplib::Server& svr, std::vector<UpstreamSpec> upstreams);
+
+// Тело GET /version гейтвея: service, version, build, git_commit, started_at.
+// Им же гейтвей открывает сводку GET /api/versions (versions.cpp).
+nlohmann::json version_json();
 
 } // namespace docsapi

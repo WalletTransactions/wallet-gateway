@@ -16,6 +16,9 @@ FROM debian:bookworm-slim AS build
 # VERSION при этом всё равно на месте, см. CMakeLists.txt, "Версия
 # приложения").
 ARG GIT_COMMIT=unknown
+# APP_BUILD — тег образа (`0.1.1-rc.2`), его передаёт release.yml; пусто —
+# CMake подставит `<VERSION>-dev` (GET /version, поле build).
+ARG APP_BUILD=
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -42,7 +45,7 @@ COPY scripts/ scripts/
 #   openapi.yaml берёт напрямую из контекста, а не из стадии build.
 
 ARG BUILD_JOBS=3
-RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DGIT_COMMIT="${GIT_COMMIT}" \
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DGIT_COMMIT="${GIT_COMMIT}" -DAPP_BUILD="${APP_BUILD}" \
     && cmake --build build --config Release -j"${BUILD_JOBS}"
 
 FROM debian:bookworm-slim AS runtime
