@@ -95,6 +95,21 @@ std::string loggable_response_body(const httplib::Response& res) {
     return truncate_body(res.body);
 }
 
+// Тела запросов/ответов в журнал — только по явному LOG_BODIES=1 (локальная
+// отладка), а не по уровню debug: debug включён в контурах по умолчанию, и
+// раньше тела всех маршрутов — суммы отчётов, /sync/push, ответы /auth/refresh
+// с refresh-токеном, ответы инструментов /api/mcp/ — уходили в журнал и
+// OpenSearch (2026-11-02, test). Без флага пишутся только размеры.
+bool g_log_bodies = false;
+
+// Даже с LOG_BODIES=1 эти тела не пишутся никогда: в /auth/* — токены и коды
+// входа, в /api/mcp/ — ответы инструментов с суммами и комментариями (design
+// D13 wallet-mcp: тела MCP в журнал не попадают).
+bool body_logging_forbidden(const std::string& path) {
+    auto starts = [&](const char* p) { return path.rfind(p, 0) == 0; };
+    return path == "/auth" || starts("/auth/") || path == "/api/mcp" || starts("/api/mcp/");
+}
+
 std::string default_log_dir() {
 #ifdef _WIN32
     return "logs";
@@ -406,6 +421,7 @@ int main() {
     std::string log_dir = env_or("LOG_DIR", default_log_dir());
     if (log_dir == "stdout" || log_dir == "-") log_dir.clear();
     applog::init(log_dir, "wallet-gateway");
+    g_log_bodies = env_or("LOG_BODIES", "") == "1";
 
     // build_info для /metrics (см. util/metrics.cpp) — один раз здесь, до
     // svr.listen() (см. GET /version, docs.cpp — та же тройка полей).
@@ -515,10 +531,17 @@ int main() {
         // что угодно из апстримов (пароли, токены, платёжные данные), а
         // level — как раз то поле, по которому такие строки отфильтровывают
         // из постоянного мониторинга (jq/Loki), не разбирая msg.
-        applog::debug(req.method + " " + req.path,
-                      {{"event", "request_body"},
-                       {"request_body", truncate_body(req.body)},
-                       {"response_body", loggable_response_body(res)}});
+        if (g_log_bodies && !body_logging_forbidden(req.path)) {
+            applog::debug(req.method + " " + req.path,
+                          {{"event", "request_body"},
+                           {"request_body", truncate_body(req.body)},
+                           {"response_body", loggable_response_body(res)}});
+        } else {
+            applog::debug(req.method + " " + req.path,
+                          {{"event", "request_body"},
+                           {"request_bytes", req.body.size()},
+                           {"response_bytes", res.body.size()}});
+        }
         applog::clear_request_context();
     });
 
