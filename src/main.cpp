@@ -504,7 +504,8 @@ int main() {
     docsapi::register_routes(svr, {{"google-auth", state.auth_service_url},
                                    {"wallet-api", state.wallet_api_url},
                                    {"wallet-report", state.wallet_report_api_url},
-                                   {"wallet-ai", state.wallet_ai_url}});
+                                   {"wallet-ai", state.wallet_ai_url},
+                                   {"wallet-mcp", state.wallet_mcp_url}});
 
     // GET /api/versions — тоже до catch-all; доступ проверен в
     // handle_pre_routing. Порядок — порядок строк в сводке.
