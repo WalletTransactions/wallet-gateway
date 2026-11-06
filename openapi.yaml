@@ -14,8 +14,8 @@ info:
     - `google-auth/openapi.yaml` — то, что форвардится с `/auth/*` и `/admin/*`;
     - `wallet-report/openapi.yaml` — то, что форвардится с `/api/reports/*`;
     - `wallet-ai/openapi.yaml` — то, что форвардится с `/api/ai/*`;
-    - `wallet-mcp` (MCP Streamable HTTP, JSON-RPC; контракт — в репозитории
-      wallet-mcp, `openspec/specs`) — то, что форвардится с `/api/mcp/*`;
+    - `wallet-mcp/openapi.yaml` (MCP Streamable HTTP, JSON-RPC; инструменты
+      описывает сам MCP — `tools/list`) — то, что форвардится с `/api/mcp/*`;
     - `wallet-api/openapi.yaml` — то, что форвардится с остальным `/api/*` и `/sync/*`.
 
     **Проксируется без изменений**: метод, путь+query string (`req.target`),
@@ -102,8 +102,8 @@ paths:
       summary: "Swagger UI — эта самая страница: своя спека и спеки апстримов выпадающим списком"
       description: |
         Выпадающий список в topbar: `wallet-gateway` (по умолчанию, /openapi.yaml)
-        и апстримы — `google-auth`, `wallet-api`, `wallet-report`
-        (/openapi/{name}.yaml). Во всех спеках единственный сервер — "/", так что
+        и апстримы — `google-auth`, `wallet-api`, `wallet-report`, `wallet-ai`,
+        `wallet-mcp` (/openapi/{name}.yaml). Во всех спеках единственный сервер — "/", так что
         "Try it out" идёт через гейтвей на тот адрес, с которого открыта страница.
       tags: [self]
       security: []
@@ -144,7 +144,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [google-auth, wallet-api, wallet-report]
+            enum: [google-auth, wallet-api, wallet-report, wallet-ai, wallet-mcp]
       responses:
         "200":
           description: openapi.yaml апстрима с дописанным сервером "/"

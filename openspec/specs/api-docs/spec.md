@@ -11,12 +11,13 @@
 `GET /docs` SHALL отдавать HTML-страницу Swagger UI (`text/html; charset=utf-8`,
 заголовок `wallet-gateway — API docs`) со списком спек в верхней панели:
 `wallet-gateway` (`/openapi.yaml`, выбрана по умолчанию), затем `google-auth`,
-`wallet-api`, `wallet-report`, `wallet-ai` (`/openapi/<name>.yaml`). «Try it out»
-включён сразу. Скрипты и стили страницы берутся только с `/vendor/swagger-ui/`.
+`wallet-api`, `wallet-report`, `wallet-ai`, `wallet-mcp` (`/openapi/<name>.yaml`).
+«Try it out» включён сразу. Скрипты и стили страницы берутся только с
+`/vendor/swagger-ui/`.
 
 #### Scenario: Открытие документации
 - **WHEN** пользователь открывает `http://<адрес>:8090/docs`
-- **THEN** показана спека гейтвея, а в списке есть ещё четыре апстрима
+- **THEN** показана спека гейтвея, а в списке есть ещё пять апстримов
 
 #### Scenario: Без интернета
 - **WHEN** у машины нет доступа наружу
@@ -33,7 +34,7 @@
 
 ### Requirement: Спеки апстримов через гейтвей
 `GET /openapi/<name>.yaml` для `name` из `google-auth`, `wallet-api`,
-`wallet-report`, `wallet-ai` SHALL на каждый запрос забирать `GET /openapi.yaml` у
+`wallet-report`, `wallet-ai`, `wallet-mcp` SHALL на каждый запрос забирать `GET /openapi.yaml` у
 этого апстрима (соединение до 3 с, ответ до 5 с) и отдавать его с блоком `servers`
 верхнего уровня, заменённым на единственный `- url: /` с описанием
 `Через гейтвей — тот же адрес, что у этой страницы`. Нет блока `servers` —
