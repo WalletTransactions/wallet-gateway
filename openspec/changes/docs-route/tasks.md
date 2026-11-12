@@ -13,5 +13,5 @@
 
 ## Workflow follow-up
 
-- Выкатить после google-auth `docs-audience` и сервиса wallet-docs; затем добавить `WALLET_DOCS_URL` в `compose.yaml` контура (wallet-infra, change `wallet-docs-assistant`).
+- Выкатить после google-auth `docs-audience` и сервиса wallet-docs; затем задать `WALLET_DOCS_URL` в `infra/env/<env>.env` вместе с профилем `docs` (wallet-infra, change `wallet-docs-assistant`).
 - Архивировать change после выката на test и проверки.

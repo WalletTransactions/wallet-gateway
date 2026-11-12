@@ -32,5 +32,5 @@
 
 - **wallet-gateway**: таблица маршрутов, чтение окружения, `openapi.yaml`, README, тесты маршрутизации.
 - **google-auth**: токены должны нести `wallet-docs` в `aud` (change `docs-audience`).
-- **wallet-infra**: `WALLET_DOCS_URL` в `compose.yaml` без `depends_on` (change `wallet-docs-assistant`).
+- **wallet-infra**: `WALLET_DOCS_URL` как `${WALLET_DOCS_URL-}` в `compose.yaml` без `depends_on`, значение — в `<env>.env` вместе с профилем (change `wallet-docs-assistant`).
 - Остальные маршруты и `edge-jwt-gate` не меняются: гейт уже действует на `/api/*`.
