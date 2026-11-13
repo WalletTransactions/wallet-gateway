@@ -16,6 +16,7 @@ JWT-гейт с указанным адресатом `aud`:
 | --- | --- | --- |
 | `/api/reports/` | wallet-report (`WALLET_REPORT_API_URL`) | `wallet-report` |
 | `/api/ai/` | wallet-ai (`WALLET_AI_URL`) | `wallet-ai` |
+| `/api/docs/` | wallet-docs (`WALLET_DOCS_URL`, необязательный) | `wallet-docs` |
 | `/api/mcp/` | wallet-mcp (`WALLET_MCP_URL`) | — (без гейта, см. `edge-jwt-gate`) |
 | `/api/` (прочее) | wallet-api (`WALLET_API_URL`) | `wallet-api` |
 | `/sync/` | wallet-api (`WALLET_API_URL`) | `wallet-api` |
@@ -30,6 +31,10 @@ JWT-гейт с указанным адресатом `aud`:
 #### Scenario: ИИ раньше общего /api/
 - **WHEN** приходит `DELETE /api/ai/jobs/{id}`
 - **THEN** запрос уходит в wallet-ai
+
+#### Scenario: Документация раньше общего /api/
+- **WHEN** приходит `POST /api/docs/ask` с токеном, где `aud` содержит `wallet-docs`, и `WALLET_DOCS_URL` задан
+- **THEN** запрос уходит в wallet-docs на тот же путь, а не в wallet-api
 
 #### Scenario: MCP раньше общего /api/
 - **WHEN** приходит `POST /api/mcp/` с заголовком `Authorization: Bearer wmcp_…`
@@ -54,8 +59,8 @@ JWT-гейт с указанным адресатом `aud`:
 
 ### Requirement: Порядок и сравнение префиксов
 Гейтвей SHALL сравнивать префиксы с путём запроса (`req.path`, без query) в
-порядке `/api/reports/`, `/api/ai/`, `/api/mcp/`, `/api/`, `/sync/`, `/auth/`,
-`/admin/`; первый совпавший побеждает. Префикс сравнивается вместе с
+порядке `/api/reports/`, `/api/ai/`, `/api/docs/`, `/api/mcp/`, `/api/`, `/sync/`,
+`/auth/`, `/admin/`; первый совпавший побеждает. Префикс сравнивается вместе с
 завершающим `/`.
 
 #### Scenario: Префикс без завершающего слеша
@@ -65,6 +70,10 @@ JWT-гейт с указанным адресатом `aud`:
 #### Scenario: MCP без завершающего слеша
 - **WHEN** приходит `POST /api/mcp` (без `/` в конце) с `Authorization: Bearer wmcp_…`
 - **THEN** путь совпадает только с общим `/api/`, запрос проходит JWT-гейт с адресатом `wallet-api` и получает `401` гейтвея; в wallet-mcp он не уходит
+
+#### Scenario: Документация без завершающего слеша
+- **WHEN** приходит `GET /api/docs` (без `/` в конце)
+- **THEN** путь совпадает только с общим `/api/`, запрос идёт в wallet-api, в wallet-docs не уходит
 
 ### Requirement: Собственные пути гейтвея не проксируются
 Гейтвей SHALL сам отвечать на `GET /docs`, `GET /openapi.yaml`,
@@ -104,6 +113,7 @@ cpp-httplib.
 `WALLET_REPORT_API_URL`, `WALLET_AI_URL`, `WALLET_MCP_URL` и `WALLET_WEB_URL`.
 Завершающие `/` в адресах отбрасываются. Если любая из них пуста, гейтвей пишет в
 журнал `<KEY> must be set — <подсказка> (см. README.md)` и завершается с кодом `1`.
+`WALLET_DOCS_URL` необязателен: пустой или отсутствующий, он не мешает старту.
 
 #### Scenario: Нет адреса wallet-ai
 - **WHEN** гейтвей запускается без `WALLET_AI_URL`
@@ -112,6 +122,10 @@ cpp-httplib.
 #### Scenario: Нет адреса wallet-mcp
 - **WHEN** гейтвей запускается без `WALLET_MCP_URL`
 - **THEN** в журнале `WALLET_MCP_URL must be set — адрес wallet-mcp, например http://127.0.0.1:8088 (см. README.md)`, процесс завершается с кодом 1
+
+#### Scenario: Нет адреса wallet-docs
+- **WHEN** гейтвей запускается без `WALLET_DOCS_URL`
+- **THEN** гейтвей стартует, остальные маршруты работают, а в журнале нет ошибки про `WALLET_DOCS_URL`
 
 ### Requirement: Недоступный апстрим
 Гейтвей SHALL ждать соединения с апстримом до 10 с и ответа до 30 с. Если
@@ -126,3 +140,17 @@ cpp-httplib.
 #### Scenario: Long-poll в пределах таймаута
 - **WHEN** приходит `GET /api/ai/jobs/{id}?wait=25`, и wallet-ai отвечает через 25 с
 - **THEN** ответ апстрима доходит до клиента, `502` нет
+
+### Requirement: Документация не подключена
+Если `WALLET_DOCS_URL` не задан, гейтвей SHALL отвечать на любой запрос с префиксом
+`/api/docs/` статусом `404` и телом `gateway: docs не подключён` (`text/plain;
+charset=utf-8`), не проверяя токен и не обращаясь к апстримам. Если задан, а сервис
+недоступен, действует «Недоступный апстрим» (`502`).
+
+#### Scenario: Анонимный запрос без docs
+- **WHEN** `WALLET_DOCS_URL` не задан и приходит `GET /api/docs/status` без токена
+- **THEN** ответ `404` с телом `gateway: docs не подключён`, а не `401`
+
+#### Scenario: Сервис остановлен
+- **WHEN** `WALLET_DOCS_URL` задан, wallet-docs остановлен и приходит `GET /api/docs/status` с действительным токеном
+- **THEN** ответ `502` с телом `gateway: сервис недоступен`
