@@ -210,6 +210,12 @@ cp .env.example .env
 - `WALLET_DOCS_URL` — необязательный адрес wallet-docs (`/api/docs/*`, см.
   "Документация" выше), например `http://wallet-docs:8089` в compose. Пусто —
   модуль не подключён: гейтвей стартует, `/api/docs/*` отвечает `404`.
+- `WALLET_DOCS_READ_TIMEOUT_SEC` — сколько ждать ответа wallet-docs, в секундах
+  (по умолчанию `130`; у остальных маршрутов — `30`). `POST /api/docs/ask`
+  синхронно ждёт LLM, и 30 с ему мало (change `docs-read-timeout`). Держать
+  длиннее `LLM_TIMEOUT_MS` wallet-docs (120 с по умолчанию): тогда долгая LLM
+  даёт клиенту `503 llm_unavailable` wallet-docs, а не `502` гейтвея. Не целое
+  положительное число — ошибка старта и код `1`.
 - `WALLET_TELEGRAM_URL` — необязательный адрес wallet-telegram
   (`http://wallet-telegram:8086` в compose), только для опроса его
   `/version` в сводке `GET /api/versions`. Маршрута в бота нет и не

@@ -129,6 +129,8 @@ bool starts_with(const std::string& path, const char* prefix) {
     return path.rfind(prefix, 0) == 0;
 }
 
+constexpr int kDefaultReadTimeoutSec = 30;
+
 struct RouteTarget {
     std::string upstream;
     bool require_jwt;
@@ -143,6 +145,9 @@ struct RouteTarget {
     // (org/docs/TODO_telegram_tokens.md, шаг 2). Пусто — маршрут без JWT-гейта.
     // scope гейтвей не проверяет: что именно можно, решает сам бэкенд.
     std::string audience;
+    // Сколько ждать ответа апстрима, с (см. «Недоступный апстрим» в спеке
+    // request-routing). Свой — только у /api/docs/* (docs-read-timeout).
+    int read_timeout_sec = kDefaultReadTimeoutSec;
 };
 
 // Порядок важен — первый подходящий префикс побеждает. /auth/* и /admin/*
@@ -182,8 +187,10 @@ RouteTarget find_route(const AppState& state, const std::string& path) {
     // change docs-route). Область документации (role, platform) проверяет сам
     // wallet-docs. Пустой wallet_docs_url сюда не доходит — handle_pre_routing
     // отвечает 404 раньше. /api/docs без слеша уходит в общий /api/.
+    // Свой таймаут чтения: ответ LLM на /ask бывает дольше общих 30 с
+    // (docs-read-timeout).
     if (starts_with(path, "/api/docs/")) {
-        return {state.wallet_docs_url, true, "proxy /api/docs/*", "wallet-docs"};
+        return {state.wallet_docs_url, true, "proxy /api/docs/*", "wallet-docs", state.docs_read_timeout_sec};
     }
     // /api/mcp/* — ДО общего /api/* и БЕЗ гейта (require_jwt = false, aud
     // пуст), см. комментарий над find_route. /api/mcp без слеша сюда не
@@ -320,11 +327,11 @@ constexpr const char* kNoCompressionUpstream = "identity";
 // req.target — «сырой» путь запроса ВКЛЮЧАЯ query string (в отличие от
 // req.path, который httplib уже разбирает отдельно от параметров) — как
 // раз то, что нужно передать апстриму без пересборки.
-bool proxy_request(const std::string& upstream, const httplib::Request& req,
+bool proxy_request(const std::string& upstream, int read_timeout_sec, const httplib::Request& req,
                     httplib::Response& res) {
     httplib::Client cli(upstream);
     cli.set_connection_timeout(10, 0);
-    cli.set_read_timeout(30, 0);
+    cli.set_read_timeout(read_timeout_sec, 0);
 
     httplib::Request out;
     out.method = req.method;
@@ -452,7 +459,7 @@ httplib::Server::HandlerResponse handle_pre_routing(AppState& state, const httpl
 // google-auth — раньше этот путь не проверялся, страница была на :8080).
 void handle_proxy(AppState& state, const httplib::Request& req, httplib::Response& res) {
     RouteTarget route = find_route(state, req.path);
-    if (!proxy_request(route.upstream, req, res)) {
+    if (!proxy_request(route.upstream, route.read_timeout_sec, req, res)) {
         res.status = 502;
         res.set_content("gateway: сервис недоступен", "text/plain; charset=utf-8");
     }
@@ -493,6 +500,28 @@ int main() {
     // Необязательный (change docs-route, D1): пусто — /api/docs/* отвечает
     // 404 «gateway: docs не подключён», остальные маршруты как обычно.
     state.wallet_docs_url = strip_trailing_slash(env_or("WALLET_DOCS_URL", ""));
+    // Необязательный (change docs-read-timeout): целое число секунд > 0,
+    // иначе — ошибка старта, как у обязательных адресов: молча подставленное
+    // умолчание вместо опечатки нашлось бы только по 502 у пользователей.
+    {
+        std::string raw = env_or("WALLET_DOCS_READ_TIMEOUT_SEC", "");
+        if (!raw.empty()) {
+            int v = 0;
+            try {
+                std::size_t used = 0;
+                v = std::stoi(raw, &used);
+                if (used != raw.size()) v = 0;
+            } catch (const std::exception&) {
+                v = 0;
+            }
+            if (v <= 0) {
+                applog::error("WALLET_DOCS_READ_TIMEOUT_SEC must be a positive integer, got '" + raw +
+                              "' (см. README.md)");
+                return 1;
+            }
+            state.docs_read_timeout_sec = v;
+        }
+    }
     // Тянет JWKS сразу при старте — если auth-сервис ещё не поднят, не
     // фатально: залогируется ошибка, первый реальный запрос на защищённый
     // префикс попробует обновить кэш ещё раз (см. jwks::Cache::find).
@@ -618,7 +647,10 @@ int main() {
                  " (auth: " + state.auth_service_url + ", wallet-api: " + state.wallet_api_url +
                  ", wallet-report: " + state.wallet_report_api_url +
                  ", wallet-ai: " + state.wallet_ai_url + ", wallet-mcp: " + state.wallet_mcp_url +
-                 ", wallet-docs: " + (state.wallet_docs_url.empty() ? std::string("не подключён") : state.wallet_docs_url) +
+                 ", wallet-docs: " + (state.wallet_docs_url.empty()
+                                       ? std::string("не подключён")
+                                       : state.wallet_docs_url + " (ожидание ответа " +
+                                             std::to_string(state.docs_read_timeout_sec) + " с)") +
                  ", web: " + state.wallet_web_url +
                  (state.wallet_telegram_url.empty() ? "" : ", telegram (только версия): " + state.wallet_telegram_url) +
                  ")" +

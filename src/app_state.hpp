@@ -42,6 +42,11 @@ struct AppState {
     // апстрим: пусто (WALLET_DOCS_URL не задан) — модуль не подключён,
     // /api/docs/* получает 404 до проверки токена (design D1, D2).
     std::string wallet_docs_url;
+    // Таймаут чтения ответа wallet-docs, с (WALLET_DOCS_READ_TIMEOUT_SEC,
+    // change docs-read-timeout). POST /api/docs/ask синхронно ждёт LLM —
+    // общих 30 с не хватает. Должен быть длиннее LLM_TIMEOUT_MS wallet-docs,
+    // чтобы клиент получил его 503 llm_unavailable, а не наш 502.
+    int docs_read_timeout_sec = 130;
 
     // Куда роутить /api/mcp/* — MCP-сервер для LLM-клиентов (wallet-mcp).
     // Тоже ДО общего /api/* в find_route, и единственный префикс внутри
