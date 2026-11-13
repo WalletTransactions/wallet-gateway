@@ -178,6 +178,13 @@ RouteTarget find_route(const AppState& state, const std::string& path) {
     // /api/ai/* — тоже ДО общего /api/*: LLM-функции (wallet-ai, см.
     // org/docs/TODO_wallet_ai.md). scope ai:use проверяет сам wallet-ai.
     if (starts_with(path, "/api/ai/")) return {state.wallet_ai_url, true, "proxy /api/ai/*", "wallet-ai"};
+    // /api/docs/* — тоже ДО общего /api/*: справочник по спекам (wallet-docs,
+    // change docs-route). Область документации (role, platform) проверяет сам
+    // wallet-docs. Пустой wallet_docs_url сюда не доходит — handle_pre_routing
+    // отвечает 404 раньше. /api/docs без слеша уходит в общий /api/.
+    if (starts_with(path, "/api/docs/")) {
+        return {state.wallet_docs_url, true, "proxy /api/docs/*", "wallet-docs"};
+    }
     // /api/mcp/* — ДО общего /api/* и БЕЗ гейта (require_jwt = false, aud
     // пуст), см. комментарий над find_route. /api/mcp без слеша сюда не
     // попадает — уходит в общий /api/ и получает 401 гейта.
@@ -410,6 +417,17 @@ httplib::Server::HandlerResponse handle_pre_routing(AppState& state, const httpl
         return httplib::Server::HandlerResponse::Unhandled;
     }
 
+    // wallet-docs — необязательный модуль (change docs-route, D1/D2): без
+    // WALLET_DOCS_URL один и тот же 404 любому запросу на /api/docs/*, без
+    // проверки токена — анонимный клиент тоже должен увидеть «модуля нет»,
+    // а не 401.
+    if (state.wallet_docs_url.empty() && starts_with(req.path, "/api/docs/")) {
+        applog::set_route("proxy /api/docs/*");
+        res.status = 404;
+        res.set_content("gateway: docs не подключён", "text/plain; charset=utf-8");
+        return httplib::Server::HandlerResponse::Handled;
+    }
+
     RouteTarget route = find_route(state, req.path);
     applog::set_route(route.route_label); // грубая категория — см. RouteTarget/find_route выше
     if (!route.require_jwt || has_valid_token(req, *state.jwks, route.audience)) {
@@ -472,6 +490,9 @@ int main() {
     // Необязательный: только для сводки GET /api/versions. В find_route бота
     // нет — через гейтвей он не публикуется.
     state.wallet_telegram_url = strip_trailing_slash(env_or("WALLET_TELEGRAM_URL", ""));
+    // Необязательный (change docs-route, D1): пусто — /api/docs/* отвечает
+    // 404 «gateway: docs не подключён», остальные маршруты как обычно.
+    state.wallet_docs_url = strip_trailing_slash(env_or("WALLET_DOCS_URL", ""));
     // Тянет JWKS сразу при старте — если auth-сервис ещё не поднят, не
     // фатально: залогируется ошибка, первый реальный запрос на защищённый
     // префикс попробует обновить кэш ещё раз (см. jwks::Cache::find).
@@ -597,6 +618,7 @@ int main() {
                  " (auth: " + state.auth_service_url + ", wallet-api: " + state.wallet_api_url +
                  ", wallet-report: " + state.wallet_report_api_url +
                  ", wallet-ai: " + state.wallet_ai_url + ", wallet-mcp: " + state.wallet_mcp_url +
+                 ", wallet-docs: " + (state.wallet_docs_url.empty() ? std::string("не подключён") : state.wallet_docs_url) +
                  ", web: " + state.wallet_web_url +
                  (state.wallet_telegram_url.empty() ? "" : ", telegram (только версия): " + state.wallet_telegram_url) +
                  ")" +
