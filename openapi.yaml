@@ -4,7 +4,7 @@ info:
   version: "1.0.0"
   description: |
     Единая внешняя точка входа (порт 8090) — путь-ориентированная
-    маршрутизация к `google-auth`/`wallet-api`/`wallet-report`/`wallet-ai`/`wallet-mcp`/`wallet-web`
+    маршрутизация к `google-auth`/`wallet-api`/`wallet-report`/`wallet-ai`/`wallet-docs`/`wallet-mcp`/`wallet-web`
     (то же, что в проде решил бы ALB с path-based routing, см.
     `wallet-gateway/README.md`). У сервиса НЕТ собственных
     бизнес-операций — эта спецификация описывает саму таблицу маршрутизации
@@ -89,7 +89,7 @@ tags:
       зарегистрировано в main.cpp ДО catch-all /{proxyPath} ниже — иначе
       эти пути форвардились бы на wallet-web как обычный фолбэк).
   - name: gated-proxy
-    description: "/api/reports/* (wallet-report), /api/ai/* (wallet-ai), /api/* и /sync/* (wallet-api) — форвардятся апстримам, требуют синтаксически валидный JWT. Незакрытые префиксы: /api/mcp/* (wallet-mcp, единственное исключение внутри /api/*), /auth/* и /admin/* — см. тег open-proxy"
+    description: "/api/reports/* (wallet-report), /api/ai/* (wallet-ai), /api/docs/* (wallet-docs, необязательный), /api/* и /sync/* (wallet-api) — форвардятся апстримам, требуют синтаксически валидный JWT. Незакрытые префиксы: /api/mcp/* (wallet-mcp, единственное исключение внутри /api/*), /auth/* и /admin/* — см. тег open-proxy"
   - name: open-proxy
     description: "/api/mcp/* — форвардится на wallet-mcp, /auth/* и /admin/* — на google-auth; без проверки токена на гейтвее"
   - name: static-fallback
@@ -265,6 +265,19 @@ paths:
       - $ref: "#/components/parameters/proxyPath"
     get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/... (см. его openapi.yaml) — тоже ДО общего /api/{proxyPath}; в токене нужен aud wallet-ai"}
     post: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/..."}
+
+  /api/docs/{proxyPath}:
+    parameters:
+      - $ref: "#/components/parameters/proxyPath"
+    get:
+      <<: *gatedProxy
+      tags: [gated-proxy]
+      summary: "Проксируется на wallet-docs /api/docs/... (см. его openapi.yaml) — тоже ДО общего /api/{proxyPath}; в токене нужен aud wallet-docs"
+      description: |
+        Необязательный апстрим `WALLET_DOCS_URL`. Не задан — `404` с телом
+        `gateway: docs не подключён` до проверки токена; задан, но сервис
+        остановлен — `502`. `/api/docs` без завершающего `/` сюда НЕ попадает.
+    post: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-docs /api/docs/... (POST /api/docs/ask)"}
 
   /api/mcp/{proxyPath}:
     parameters:

@@ -20,6 +20,7 @@ catch-all `/{proxyPath}`); `/docs` каждого апстрима — по ег
                 ├─ /auth/*          ──> auth-service    (google-auth, :8080)
                 ├─ /api/reports/*   ──> wallet-report    (read-only, шареная БД, :8084)
                 ├─ /api/ai/*        ──> wallet-ai        (LLM-функции, :8087)
+                ├─ /api/docs/*      ──> wallet-docs      (справочник по спекам, необязательный, :8089)
                 ├─ /api/mcp/*       ──> wallet-mcp (MCP, без JWT-гейта, :8088)
                 ├─ /api/* (прочее)  ──> wallet-api       (кошельки+синк, своя БД, :8082)
                 ├─ /admin/*         ──> auth-service
@@ -55,6 +56,27 @@ google-auth, "Через гейтвей, не напрямую"), а гейтв�
 маршрутизируется на другой апстрим — `WALLET_REPORT_API_URL`, не
 `WALLET_API_URL` (см. `find_route` в `main.cpp`, порядок проверки префиксов
 важен: `/api/reports/` — ДО общего `/api/`, иначе тот перехватил бы первым).
+
+### Документация (`/api/docs/*`) — необязательный апстрим
+
+`/api/docs/*` уходит в wallet-docs (`WALLET_DOCS_URL`, справочник «как это
+работает» по OpenSpec-спекам) через тот же JWT-гейт, что `/api/ai/*`, с
+адресатом `aud` = `wallet-docs`. Префикс стоит раньше общего `/api/`. Какие
+спеки видит пользователь (`role`, `platform`), решает сам wallet-docs.
+
+Это единственный необязательный апстрим: без `WALLET_DOCS_URL` гейтвей
+стартует как обычно, а на любой запрос `/api/docs/*` отвечает `404` с телом
+`gateway: docs не подключён`, не проверяя токен. Если адрес задан, а сервис
+остановлен, ответ обычный — `502 gateway: сервис недоступен`. Клиенты скрывают
+раздел на любом не-`200` от `GET /api/docs/status`. `/api/docs` без слеша
+совпадает только с общим `/api/` и уходит в wallet-api. Заливка индекса
+(`PUT /docs/index/{repo}`) через гейтвей не идёт: Jenkins ходит в wallet-docs
+напрямую по сети контура, а `/docs` — собственный Swagger-путь гейтвея.
+
+```sh
+curl -i http://127.0.0.1:8090/api/docs/status                 # без WALLET_DOCS_URL: 404 gateway: docs не подключён
+curl -i -H "Authorization: Bearer $JWT" http://127.0.0.1:8090/api/docs/status   # с ним: ответ wallet-docs
+```
 
 ### MCP-префикс (`/api/mcp/*`) — без гейта
 
@@ -185,6 +207,9 @@ cp .env.example .env
   конфиге — гейтвей сам тянет публичный ключ auth-сервиса с
   `AUTH_SERVICE_URL + /.well-known/jwks.json` (см. "Как убрали общий секрет"
   выше).
+- `WALLET_DOCS_URL` — необязательный адрес wallet-docs (`/api/docs/*`, см.
+  "Документация" выше), например `http://wallet-docs:8089` в compose. Пусто —
+  модуль не подключён: гейтвей стартует, `/api/docs/*` отвечает `404`.
 - `WALLET_TELEGRAM_URL` — необязательный адрес wallet-telegram
   (`http://wallet-telegram:8086` в compose), только для опроса его
   `/version` в сводке `GET /api/versions`. Маршрута в бота нет и не

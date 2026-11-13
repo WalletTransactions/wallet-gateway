@@ -37,6 +37,12 @@ struct AppState {
     // Тоже ДО общего /api/* в find_route.
     std::string wallet_ai_url;
 
+    // Куда роутить /api/docs/* — справочный сервис по OpenSpec-спекам
+    // (wallet-docs, change docs-route). Необязательный, единственный такой
+    // апстрим: пусто (WALLET_DOCS_URL не задан) — модуль не подключён,
+    // /api/docs/* получает 404 до проверки токена (design D1, D2).
+    std::string wallet_docs_url;
+
     // Куда роутить /api/mcp/* — MCP-сервер для LLM-клиентов (wallet-mcp).
     // Тоже ДО общего /api/* в find_route, и единственный префикс внутри
     // /api/*, где гейтвей НЕ проверяет токен: клиент предъявляет
