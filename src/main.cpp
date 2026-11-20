@@ -327,6 +327,38 @@ constexpr const char* kNoCompressionUpstream = "identity";
 // req.target — «сырой» путь запроса ВКЛЮЧАЯ query string (в отличие от
 // req.path, который httplib уже разбирает отдельно от параметров) — как
 // раз то, что нужно передать апстриму без пересборки.
+// Заголовки запроса апстриму — общие для буферизованного и потокового
+// проксирования.
+httplib::Headers upstream_request_headers(const httplib::Request& req) {
+    httplib::Headers headers;
+    for (const auto& [key, value] : req.headers) {
+        if (!is_hop_by_hop(key) && !is_accept_encoding(key)) headers.emplace(key, value);
+    }
+    // Явный "identity", не просто отсутствие заголовка — см. комментарий у
+    // is_accept_encoding выше, почему пустое место здесь подставил бы сам
+    // httplib::Client своим умолчательным "gzip, deflate".
+    headers.emplace("Accept-Encoding", kNoCompressionUpstream);
+    // Host выше сознательно не форвардится (см. is_hop_by_hop) — апстрим сам
+    // не может отличить, каким адресом реально пользовался браузер
+    // (localhost:8090 или LAN-адрес). google-auth это нужно знать, чтобы
+    // выбрать правильный redirect_uri для Google (см. его
+    // google.cpp::resolve_redirect_uri) — кладём исходный Host отдельным
+    // заголовком, стандартным для реверс-прокси именем.
+    std::string original_host = req.get_header_value("Host");
+    if (!original_host.empty()) headers.emplace("X-Forwarded-Host", original_host);
+    // Если клиент уже прислал X-Trace-Id, он уже скопирован циклом выше
+    // (не hop-by-hop) — здесь только достраиваем случай, когда его не было
+    // и gateway сам сгенерировал id в handle_pre_routing (см. main()):
+    // апстрим должен увидеть тот же id, что уже попал в наши собственные
+    // логи этого запроса (applog::current_trace_id() — тот же thread_local,
+    // что выставлен ниже по стеку вызовов на этом же потоке).
+    if (headers.find("X-Trace-Id") == headers.end()) {
+        std::string trace_id = applog::current_trace_id();
+        if (!trace_id.empty()) headers.emplace("X-Trace-Id", trace_id);
+    }
+    return headers;
+}
+
 bool proxy_request(const std::string& upstream, int read_timeout_sec, const httplib::Request& req,
                     httplib::Response& res) {
     httplib::Client cli(upstream);
@@ -337,31 +369,7 @@ bool proxy_request(const std::string& upstream, int read_timeout_sec, const http
     out.method = req.method;
     out.path = req.target;
     out.body = req.body;
-    for (const auto& [key, value] : req.headers) {
-        if (!is_hop_by_hop(key) && !is_accept_encoding(key)) out.headers.emplace(key, value);
-    }
-    // Явный "identity", не просто отсутствие заголовка — см. комментарий у
-    // is_accept_encoding выше, почему пустое место здесь подставил бы сам
-    // httplib::Client своим умолчательным "gzip, deflate".
-    out.headers.emplace("Accept-Encoding", kNoCompressionUpstream);
-    // Host выше сознательно не форвардится (см. is_hop_by_hop) — апстрим сам
-    // не может отличить, каким адресом реально пользовался браузер
-    // (localhost:8090 или LAN-адрес). google-auth это нужно знать, чтобы
-    // выбрать правильный redirect_uri для Google (см. его
-    // google.cpp::resolve_redirect_uri) — кладём исходный Host отдельным
-    // заголовком, стандартным для реверс-прокси именем.
-    std::string original_host = req.get_header_value("Host");
-    if (!original_host.empty()) out.headers.emplace("X-Forwarded-Host", original_host);
-    // Если клиент уже прислал X-Trace-Id, он уже скопирован циклом выше
-    // (не hop-by-hop) — здесь только достраиваем случай, когда его не было
-    // и gateway сам сгенерировал id в handle_pre_routing (см. main()):
-    // апстрим должен увидеть тот же id, что уже попал в наши собственные
-    // логи этого запроса (applog::current_trace_id() — тот же thread_local,
-    // что выставлен ниже по стеку вызовов на этом же потоке).
-    if (out.headers.find("X-Trace-Id") == out.headers.end()) {
-        std::string trace_id = applog::current_trace_id();
-        if (!trace_id.empty()) out.headers.emplace("X-Trace-Id", trace_id);
-    }
+    out.headers = upstream_request_headers(req);
 
     httplib::Response upstream_res;
     httplib::Error err;
@@ -377,6 +385,84 @@ bool proxy_request(const std::string& upstream, int read_timeout_sec, const http
     }
     res.body = upstream_res.body; // Content-Length пересчитает сам httplib
 
+    return true;
+}
+
+// Клиент просит поток событий: GET с Accept, содержащим text/event-stream
+// (EventSource и fetch с этим заголовком). Сам по себе ничего не решает —
+// потоком ответ становится, только если апстрим тоже ответил event-stream.
+bool wants_event_stream(const httplib::Request& req) {
+    return req.method == "GET" && lowercase(req.get_header_value("Accept")).find("text/event-stream") != std::string::npos;
+}
+
+bool is_event_stream_response(const httplib::Response& r) {
+    return r.status >= 200 && r.status < 300 &&
+           lowercase(r.get_header_value("Content-Type")).rfind("text/event-stream", 0) == 0;
+}
+
+// Потоковое проксирование (change proxy-sse-stream): тело event-stream идёт
+// клиенту кусками по мере прихода. Любой другой ответ апстрима (404, 429,
+// JSON) дочитывается и отдаётся целиком, как у proxy_request. false — апстрим
+// недоступен (вызывающий отвечает 502).
+bool proxy_stream(AppState& state, const std::string& upstream, int read_timeout_sec, const httplib::Request& req,
+                  httplib::Response& res) {
+    if (state.open_streams.fetch_add(1) >= state.streams_max) {
+        state.open_streams.fetch_sub(1);
+        res.status = 503;
+        res.set_content("gateway: слишком много потоков", "text/plain; charset=utf-8");
+        return true;
+    }
+    // Слот держится, пока жив поток; при раннем выходе снимается здесь.
+    bool slot_handed_over = false;
+    struct SlotGuard {
+        AppState& state;
+        bool& handed_over;
+        ~SlotGuard() {
+            if (!handed_over) state.open_streams.fetch_sub(1);
+        }
+    } guard{state, slot_handed_over};
+
+    auto cli = std::make_shared<httplib::Client>(upstream);
+    cli->set_connection_timeout(10, 0);
+    cli->set_read_timeout(read_timeout_sec, 0); // между кусками, не на весь поток
+    auto handle = std::make_shared<httplib::ClientImpl::StreamHandle>(
+        cli->open_stream("GET", req.target, {}, upstream_request_headers(req)));
+    if (!handle->is_valid()) {
+        applog::error("upstream " + upstream + " недоступен (" + httplib::to_string(handle->error) + ") для " +
+                      req.method + " " + req.path);
+        return false;
+    }
+
+    res.status = handle->response->status;
+    if (!is_event_stream_response(*handle->response)) {
+        for (const auto& [key, value] : handle->response->headers) {
+            if (!is_hop_by_hop(key)) res.set_header(key, value);
+        }
+        char buf[8192];
+        for (ssize_t n; (n = handle->read(buf, sizeof buf)) > 0;) res.body.append(buf, static_cast<std::size_t>(n));
+        return true;
+    }
+
+    // Content-Type выставит сам провайдер; Content-Length и Content-Encoding
+    // у потока быть не могут.
+    for (const auto& [key, value] : handle->response->headers) {
+        std::string k = lowercase(key);
+        if (!is_hop_by_hop(key) && k != "content-type" && k != "content-encoding") res.set_header(key, value);
+    }
+    slot_handed_over = true;
+    AppState* st = &state;
+    res.set_chunked_content_provider(
+        "text/event-stream",
+        [cli, handle](std::size_t, httplib::DataSink& sink) {
+            char buf[4096];
+            ssize_t n = handle->read(buf, sizeof buf);
+            if (n <= 0) { // апстрим закрыл поток, оборвался или молчит дольше таймаута
+                sink.done();
+                return true;
+            }
+            return sink.write(buf, static_cast<std::size_t>(n)); // false — клиент ушёл
+        },
+        [st, cli, handle](bool) { st->open_streams.fetch_sub(1); }); // handle и cli закрываются вместе с лямбдой
     return true;
 }
 
@@ -459,7 +545,9 @@ httplib::Server::HandlerResponse handle_pre_routing(AppState& state, const httpl
 // google-auth — раньше этот путь не проверялся, страница была на :8080).
 void handle_proxy(AppState& state, const httplib::Request& req, httplib::Response& res) {
     RouteTarget route = find_route(state, req.path);
-    if (!proxy_request(route.upstream, route.read_timeout_sec, req, res)) {
+    const bool ok = wants_event_stream(req) ? proxy_stream(state, route.upstream, route.read_timeout_sec, req, res)
+                                            : proxy_request(route.upstream, route.read_timeout_sec, req, res);
+    if (!ok) {
         res.status = 502;
         res.set_content("gateway: сервис недоступен", "text/plain; charset=utf-8");
     }
@@ -522,6 +610,26 @@ int main() {
             state.docs_read_timeout_sec = v;
         }
     }
+    // Необязательный (change proxy-sse-stream): предел одновременных потоков
+    // text/event-stream; та же строгость, что у WALLET_DOCS_READ_TIMEOUT_SEC.
+    {
+        std::string raw = env_or("GATEWAY_STREAMS_MAX", "");
+        if (!raw.empty()) {
+            int v = 0;
+            try {
+                std::size_t used = 0;
+                v = std::stoi(raw, &used);
+                if (used != raw.size()) v = 0;
+            } catch (const std::exception&) {
+                v = 0;
+            }
+            if (v <= 0) {
+                applog::error("GATEWAY_STREAMS_MAX must be a positive integer, got '" + raw + "' (см. README.md)");
+                return 1;
+            }
+            state.streams_max = v;
+        }
+    }
     // Тянет JWKS сразу при старте — если auth-сервис ещё не поднят, не
     // фатально: залогируется ошибка, первый реальный запрос на защищённый
     // префикс попробует обновить кэш ещё раз (см. jwks::Cache::find).
@@ -531,6 +639,12 @@ int main() {
     int port = std::stoi(env_or("PORT", "8090"));
 
     httplib::Server svr;
+    {
+        // Каждый открытый поток держит поток пула: пул растёт на предел
+        // потоков, чтобы они не вытесняли обычные запросы.
+        const std::size_t n = CPPHTTPLIB_THREAD_POOL_COUNT + static_cast<std::size_t>(state.streams_max);
+        svr.new_task_queue = [n] { return new httplib::ThreadPool(n, n * 4); };
+    }
     // pre_routing_handler — ТОЛЬКО грубый JWT-гейт, отвечает сам (Handled)
     // лишь при 401; иначе Unhandled — пропускает запрос дальше, в один из
     // catch-all Get/Post/.../handler'ов ниже (паттерн ".*" матчит любой

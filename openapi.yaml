@@ -263,7 +263,7 @@ paths:
   /api/ai/{proxyPath}:
     parameters:
       - $ref: "#/components/parameters/proxyPath"
-    get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/... (см. его openapi.yaml) — тоже ДО общего /api/{proxyPath}; в токене нужен aud wallet-ai"}
+    get: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/... (см. его openapi.yaml) — тоже ДО общего /api/{proxyPath}; в токене нужен aud wallet-ai. GET с Accept: text/event-stream (поток событий /api/ai/jobs/{id}/events) идёт кусками без буфера, не более GATEWAY_STREAMS_MAX потоков, сверх — 503"}
     post: {<<: *gatedProxy, tags: [gated-proxy], summary: "Проксируется на wallet-ai /api/ai/..."}
 
   /api/docs/{proxyPath}:
