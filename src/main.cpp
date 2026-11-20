@@ -103,6 +103,12 @@ std::string loggable_response_body(const httplib::Response& res) {
 // OpenSearch (2026-11-02, test). Без флага пишутся только размеры.
 bool g_log_bodies = false;
 
+// TRUST_FORWARDED_HEADERS (change trusted-forwarded-headers): верить ли
+// X-Forwarded-Proto и X-Forwarded-For, пришедшим на гейтвей. false — клиентские
+// значения отбрасываются, апстрим получает схему http и адрес соединения.
+// Задаётся один раз при старте до listen() и дальше только читается.
+bool g_trust_forwarded_headers = false;
+
 // Даже с LOG_BODIES=1 эти тела не пишутся никогда: в /auth/* — токены и коды
 // входа, в /api/mcp/ — ответы инструментов с суммами и комментариями (design
 // D13 wallet-mcp: тела MCP в журнал не попадают).
@@ -324,6 +330,32 @@ bool is_hop_by_hop(const std::string& key) {
 bool is_accept_encoding(const std::string& key) { return lowercase(key) == "accept-encoding"; }
 constexpr const char* kNoCompressionUpstream = "identity";
 
+bool is_forwarded_proto_or_for(const std::string& key) {
+    std::string k = lowercase(key);
+    return k == "x-forwarded-proto" || k == "x-forwarded-for";
+}
+
+// Схема исходного запроса для апстрима. Без доверия — всегда http: сам гейтвей
+// слушает обычный HTTP, а TLS даёт прокси перед ним. С доверием — присланное
+// прокси значение, но только http/https (регистр не важен): мусор не должен
+// доехать до апстрима.
+std::string forwarded_proto(const httplib::Request& req) {
+    if (!g_trust_forwarded_headers) return "http";
+    std::string proto = lowercase(req.get_header_value("X-Forwarded-Proto"));
+    return proto == "https" ? "https" : "http";
+}
+
+// Адрес клиента для апстрима. Без доверия — адрес сетевого соединения с
+// гейтвеем. С доверием — присланный прокси X-Forwarded-For как есть (первый
+// адрес — клиент), а если его нет — адрес соединения.
+std::string forwarded_for(const httplib::Request& req) {
+    if (g_trust_forwarded_headers) {
+        std::string forwarded = req.get_header_value("X-Forwarded-For");
+        if (!forwarded.empty()) return forwarded;
+    }
+    return req.remote_addr;
+}
+
 // req.target — «сырой» путь запроса ВКЛЮЧАЯ query string (в отличие от
 // req.path, который httplib уже разбирает отдельно от параметров) — как
 // раз то, что нужно передать апстриму без пересборки.
@@ -332,8 +364,15 @@ constexpr const char* kNoCompressionUpstream = "identity";
 httplib::Headers upstream_request_headers(const httplib::Request& req) {
     httplib::Headers headers;
     for (const auto& [key, value] : req.headers) {
-        if (!is_hop_by_hop(key) && !is_accept_encoding(key)) headers.emplace(key, value);
+        if (!is_hop_by_hop(key) && !is_accept_encoding(key) && !is_forwarded_proto_or_for(key)) {
+            headers.emplace(key, value);
+        }
     }
+    // Схема и адрес клиента — решает гейтвей, а не клиентский заголовок: от них
+    // зависят проверка TLS и лимиты попыток в google-auth (change
+    // trusted-forwarded-headers). Присланные клиентом значения выше не копируются.
+    headers.emplace("X-Forwarded-Proto", forwarded_proto(req));
+    headers.emplace("X-Forwarded-For", forwarded_for(req));
     // Явный "identity", не просто отсутствие заголовка — см. комментарий у
     // is_accept_encoding выше, почему пустое место здесь подставил бы сам
     // httplib::Client своим умолчательным "gzip, deflate".
@@ -628,6 +667,24 @@ int main() {
                 return 1;
             }
             state.streams_max = v;
+        }
+    }
+    // Необязательный (change trusted-forwarded-headers): верить ли X-Forwarded-Proto и
+    // X-Forwarded-For от прокси перед гейтвеем. Только true/false — опечатка не должна
+    // молча включить или выключить доверие.
+    {
+        std::string raw = env_or("TRUST_FORWARDED_HEADERS", "");
+        if (raw.empty() || raw == "false") {
+            g_trust_forwarded_headers = false;
+        } else if (raw == "true") {
+            g_trust_forwarded_headers = true;
+        } else {
+            applog::error("TRUST_FORWARDED_HEADERS must be true or false, got '" + raw + "' (см. README.md)");
+            return 1;
+        }
+        if (g_trust_forwarded_headers) {
+            applog::info("TRUST_FORWARDED_HEADERS=true: X-Forwarded-Proto и X-Forwarded-For берутся от прокси перед гейтвеем",
+                         {{"event", "trust_forwarded_headers"}});
         }
     }
     // Тянет JWKS сразу при старте — если auth-сервис ещё не поднят, не
