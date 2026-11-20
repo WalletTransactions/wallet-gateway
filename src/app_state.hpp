@@ -3,6 +3,7 @@
 // префиксах (см. main.cpp).
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -53,6 +54,12 @@ struct AppState {
     // /api/*, где гейтвей НЕ проверяет токен: клиент предъявляет
     // непрозрачный wmcp_…, его проверяет сам wallet-mcp.
     std::string wallet_mcp_url;
+
+    // Потоки text/event-stream (change proxy-sse-stream): сколько можно
+    // держать одновременно (GATEWAY_STREAMS_MAX) и сколько открыто сейчас.
+    // Каждый поток занимает поток пула сервера и соединение с апстримом.
+    int streams_max = 50;
+    std::atomic<int> open_streams{0};
 
     // Куда роутить всё остальное (фолбэк по умолчанию) — статика SPA,
     // отдаёт nginx. Раньше здесь был wallet-bff (сервис упразднён при
