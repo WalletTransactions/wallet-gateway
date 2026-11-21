@@ -38,6 +38,9 @@ struct UpstreamSpec {
 
 void register_routes(httplib::Server& svr, std::vector<UpstreamSpec> upstreams);
 
+// Только /healthz, /metrics и /version — для служебного mTLS-порта гейтвея (add-internal-mtls, D9).
+void register_service_routes(httplib::Server& svr);
+
 // Тело GET /version гейтвея: service, version, build, git_commit, started_at.
 // Им же гейтвей открывает сводку GET /api/versions (versions.cpp).
 nlohmann::json version_json();

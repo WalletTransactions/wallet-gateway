@@ -89,12 +89,15 @@ add_executable(wallet_gateway
     src/main.cpp
     src/docs.cpp
     src/versions.cpp
+    src/upstream_tls.cpp
     ${WALLET_COMMON_DIR}/util/base64.cpp
     ${WALLET_COMMON_DIR}/util/crypto.cpp
     ${WALLET_COMMON_DIR}/util/jwt.cpp
     ${WALLET_COMMON_DIR}/util/jwt_claims.cpp
     ${WALLET_COMMON_DIR}/util/jwks.cpp
     ${WALLET_COMMON_DIR}/util/dotenv.cpp
+    ${WALLET_COMMON_DIR}/net/pool.cpp
+    ${WALLET_COMMON_DIR}/net/tls.cpp
     ${WALLET_COMMON_DIR}/util/log.cpp
     ${WALLET_COMMON_DIR}/util/metrics.cpp
 )
@@ -107,6 +110,7 @@ target_include_directories(wallet_gateway PRIVATE
 )
 
 target_compile_definitions(wallet_gateway PRIVATE
+    CPPHTTPLIB_OPENSSL_SUPPORT
     CPPHTTPLIB_ZLIB_SUPPORT
     $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>
 )
@@ -115,6 +119,7 @@ target_compile_options(wallet_gateway PRIVATE
 )
 
 target_link_libraries(wallet_gateway PRIVATE
+    OpenSSL::SSL
     OpenSSL::Crypto
     Threads::Threads
     ZLIB::ZLIB

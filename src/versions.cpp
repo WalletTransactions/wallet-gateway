@@ -5,6 +5,7 @@
 
 #include "docs.hpp"
 #include "nlohmann/json.hpp"
+#include "upstream_tls.hpp"
 
 namespace versions {
 namespace {
@@ -22,7 +23,9 @@ nlohmann::json failed(const std::string& service, const char* reason) {
 // Ответ /version апстрима — как есть, без переименования полей (старые
 // сборки без build/started_at тоже проходят: веб покажет «—»).
 nlohmann::json fetch_version(const Target& t) {
-    httplib::Client cli(t.base_url);
+    std::unique_ptr<httplib::Client> owned = upstream_tls::make(t.base_url);
+    if (!owned) return failed(t.service, "unreachable");
+    httplib::Client& cli = *owned;
     cli.set_connection_timeout(kConnectTimeoutSec, 0);
     cli.set_read_timeout(kReadTimeoutSec, 0);
     cli.set_write_timeout(kReadTimeoutSec, 0);
