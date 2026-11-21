@@ -19,8 +19,11 @@
 #include <cctype>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "net/tls.hpp"
+#include "upstream_tls.hpp"
 #include "app_state.hpp"
 #include "docs.hpp"
 #include "httplib.h"
@@ -400,10 +403,6 @@ httplib::Headers upstream_request_headers(const httplib::Request& req) {
 
 bool proxy_request(const std::string& upstream, int read_timeout_sec, const httplib::Request& req,
                     httplib::Response& res) {
-    httplib::Client cli(upstream);
-    cli.set_connection_timeout(10, 0);
-    cli.set_read_timeout(read_timeout_sec, 0);
-
     httplib::Request out;
     out.method = req.method;
     out.path = req.target;
@@ -411,8 +410,24 @@ bool proxy_request(const std::string& upstream, int read_timeout_sec, const http
     out.headers = upstream_request_headers(req);
 
     httplib::Response upstream_res;
-    httplib::Error err;
-    if (!cli.send(out, upstream_res, err)) {
+    httplib::Error err = httplib::Error::Success;
+    bool sent = false;
+    if (auto* pool = upstream_tls::pool_for(upstream, read_timeout_sec)) {
+        // mTLS: постоянные соединения из пула, один повтор на свежем при обрыве простоя (D6).
+        auto result = pool->call([&out](httplib::Client& c) { return c.send(out); });
+        if (result) {
+            upstream_res = std::move(*result);
+            sent = true;
+        } else {
+            err = result.error();
+        }
+    } else {
+        httplib::Client cli(upstream);
+        cli.set_connection_timeout(10, 0);
+        cli.set_read_timeout(read_timeout_sec, 0);
+        sent = cli.send(out, upstream_res, err);
+    }
+    if (!sent) {
         applog::error("upstream " + upstream + " недоступен (" + httplib::to_string(err) +
                       ") для " + req.method + " " + req.path);
         return false;
@@ -461,7 +476,12 @@ bool proxy_stream(AppState& state, const std::string& upstream, int read_timeout
         }
     } guard{state, slot_handed_over};
 
-    auto cli = std::make_shared<httplib::Client>(upstream);
+    // Поток — отдельный клиент мимо пула; при mTLS — https с сертификатом (D6).
+    std::shared_ptr<httplib::Client> cli = upstream_tls::make(upstream);
+    if (!cli) {
+        applog::error("upstream " + upstream + ": клиент TLS не создан для " + req.method + " " + req.path);
+        return false;
+    }
     cli->set_connection_timeout(10, 0);
     cli->set_read_timeout(read_timeout_sec, 0); // между кусками, не на весь поток
     auto handle = std::make_shared<httplib::ClientImpl::StreamHandle>(
@@ -695,6 +715,17 @@ int main() {
     std::string host = env_or("HOST", "127.0.0.1");
     int port = std::stoi(env_or("PORT", "8090"));
 
+    // Взаимный TLS к апстримам (change add-internal-mtls, шаг 7): INTERNAL_MTLS=true — вызовы к
+    // api, report, ai, mcp, web, docs по https с клиентским сертификатом; публичный порт google-auth
+    // и входной порт гейтвея остаются обычным HTTP (D9). Неполные TLS_* — ошибка старта.
+    auto tls_settings = nettls::settings_from_env();
+    if (!tls_settings.error.empty()) {
+        applog::error(tls_settings.error);
+        return 1;
+    }
+    upstream_tls::init(nettls::internal_client_config(tls_settings), state.auth_service_url);
+    if (tls_settings.call_internal) applog::info("mTLS: вызовы к апстримам по https (INTERNAL_MTLS=true)");
+
     httplib::Server svr;
     {
         // Каждый открытый поток держит поток пула: пул растёт на предел
@@ -826,10 +857,44 @@ int main() {
                  (state.wallet_telegram_url.empty() ? "" : ", telegram (только версия): " + state.wallet_telegram_url) +
                  ")" +
                  (log_dir.empty() ? "" : " (логи: " + log_dir + "/)"));
-    if (!svr.listen(host, port)) {
+    // Служебный mTLS-порт для healthcheck и Prometheus (D9): только /healthz, /metrics, /version, с
+    // обязательным клиентским сертификатом. Входной порт выше остаётся обычным HTTP — на него ходят
+    // браузер, приложение, TLS-прокси и скрипты выката, которым нечем предъявить сертификат сервиса.
+    std::unique_ptr<httplib::Server> service_svr;
+    std::thread service_thread;
+    const int service_port = std::stoi(env_or("GATEWAY_MTLS_PORT", "0"));
+    if (service_port != 0) {
+        if (!tls_settings.serve) {
+            applog::error("GATEWAY_MTLS_PORT задан, но INTERNAL_MTLS не включён (нужны TLS_CERT, TLS_KEY, TLS_CA)");
+            return 1;
+        }
+        if (service_port == port) {
+            applog::error("GATEWAY_MTLS_PORT совпадает с PORT");
+            return 1;
+        }
+        std::string service_error;
+        service_svr = nettls::make_server(tls_settings.config, &service_error);
+        if (!service_svr) {
+            applog::error(service_error);
+            return 1;
+        }
+        docsapi::register_service_routes(*service_svr);
+        if (!service_svr->bind_to_port(host, service_port)) {
+            applog::error("не удалось занять служебный mTLS-порт " + host + ":" + std::to_string(service_port));
+            return 1;
+        }
+        httplib::Server* raw = service_svr.get();
+        service_thread = std::thread([raw] { raw->listen_after_bind(); });
+        applog::info("служебный mTLS-порт (healthz, metrics, version): " + host + ":" + std::to_string(service_port));
+    }
+    const bool listened = svr.listen(host, port);
+    if (!listened) {
         applog::error("не удалось запустить сервер на " + host + ":" + std::to_string(port) +
                       " (порт занят или недоступен?)");
-        return 1;
     }
-    return 0;
+    if (service_thread.joinable()) {
+        service_svr->stop();
+        service_thread.join();
+    }
+    return listened ? 0 : 1;
 }

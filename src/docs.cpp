@@ -1,4 +1,5 @@
 #include "docs.hpp"
+#include "upstream_tls.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -126,7 +127,13 @@ void handle_upstream_spec(const std::vector<UpstreamSpec>& upstreams, const http
         return;
     }
 
-    httplib::Client cli(it->base_url);
+    std::unique_ptr<httplib::Client> owned = upstream_tls::make(it->base_url);
+    if (!owned) {
+        res.status = 502;
+        res.set_content("gateway: клиент TLS к " + name + " не создан", "text/plain; charset=utf-8");
+        return;
+    }
+    httplib::Client& cli = *owned;
     cli.set_connection_timeout(3, 0);
     cli.set_read_timeout(5, 0);
     auto upstream_res = cli.Get("/openapi.yaml");
@@ -180,6 +187,12 @@ nlohmann::json version_json() {
     j["git_commit"] = version::kGitCommit;
     j["started_at"] = metrics::started_at_iso();
     return j;
+}
+
+void register_service_routes(httplib::Server& svr) {
+    svr.Get("/healthz", handle_healthz);
+    svr.Get("/metrics", handle_metrics);
+    svr.Get("/version", handle_version);
 }
 
 void register_routes(httplib::Server& svr, std::vector<UpstreamSpec> upstreams) {

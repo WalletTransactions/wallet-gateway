@@ -267,3 +267,7 @@ build/Release/wallet_gateway.exe   # Windows; на Linux — build/wallet_gatewa
 Порядок запуска: сначала auth-service, wallet-api, wallet-report, wallet-ai, wallet-mcp и wallet-web,
 потом гейтвей (сам он ничего не поднимает, только проксирует). Дальше в
 браузере — `http://127.0.0.1:8090/`, не `8080`/`8082`/`8083`/`8084`.
+
+## Взаимный TLS внутри контура (необязательно)
+
+Change `add-internal-mtls` (wallet-infra, шаг 7). Входной порт (`PORT`) остаётся обычным HTTP — на него ходят браузер, приложение, TLS-прокси и скрипты выката. `INTERNAL_MTLS=true` включает mTLS на клиентской стороне: вызовы к api, report, ai, mcp, web и docs идут по https с клиентским сертификатом (на горячем пути — через пул постоянных соединений, `net/pool`), а публичный порт google-auth остаётся HTTP. `GATEWAY_MTLS_PORT` — второй слушатель с обязательным клиентским сертификатом и только `/healthz`, `/metrics`, `/version` (для healthcheck и Prometheus). Без `INTERNAL_MTLS` ничего не меняется.

@@ -66,6 +66,9 @@ COPY --from=build /src/build/wallet_gateway /app/wallet_gateway
 COPY openapi.yaml /app/openapi.yaml
 COPY third_party/swagger-ui/ /app/vendor/swagger-ui/
 
+# Метка поддержки взаимного TLS (change add-internal-mtls, design D8).
+LABEL org.wallet.mtls="1"
+
 USER appuser
 EXPOSE 8090
 
