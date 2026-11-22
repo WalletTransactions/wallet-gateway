@@ -9,7 +9,7 @@
 ## Requirements
 
 ### Requirement: Маршруты API
-Пути API SHALL уходить в такие апстримы. Все, кроме `/api/mcp/`, проходят
+Пути специализированных сервисов SHALL уходить в свои апстримы и проходить
 JWT-гейт с указанным адресатом `aud`:
 
 | Префикс | Апстрим | aud |
@@ -17,12 +17,6 @@ JWT-гейт с указанным адресатом `aud`:
 | `/api/reports/` | wallet-report (`WALLET_REPORT_API_URL`) | `wallet-report` |
 | `/api/ai/` | wallet-ai (`WALLET_AI_URL`) | `wallet-ai` |
 | `/api/docs/` | wallet-docs (`WALLET_DOCS_URL`, необязательный) | `wallet-docs` |
-| `/api/mcp/` | wallet-mcp (`WALLET_MCP_URL`) | — (без гейта, см. `edge-jwt-gate`) |
-| `/api/` (прочее) | wallet-api (`WALLET_API_URL`) | `wallet-api` |
-| `/sync/` | wallet-api (`WALLET_API_URL`) | `wallet-api` |
-
-Путь, query и тело уходят апстриму без изменений. Контракты путей — в
-`openapi.yaml` соответствующего апстрима.
 
 #### Scenario: Отчёты раньше общего /api/
 - **WHEN** приходит `GET /api/reports/accounts`
@@ -36,6 +30,16 @@ JWT-гейт с указанным адресатом `aud`:
 - **WHEN** приходит `POST /api/docs/ask` с токеном, где `aud` содержит `wallet-docs`, и `WALLET_DOCS_URL` задан
 - **THEN** запрос уходит в wallet-docs на тот же путь, а не в wallet-api
 
+### Requirement: Маршруты MCP, общего API и синхронизации
+Остальные пути API SHALL уходить в такие апстримы. `/api/mcp/` проходит без
+JWT-гейта, остальные — с указанным `aud`:
+
+| Префикс | Апстрим | aud |
+| --- | --- | --- |
+| `/api/mcp/` | wallet-mcp (`WALLET_MCP_URL`) | — (без гейта, см. `edge-jwt-gate`) |
+| `/api/` (прочее) | wallet-api (`WALLET_API_URL`) | `wallet-api` |
+| `/sync/` | wallet-api (`WALLET_API_URL`) | `wallet-api` |
+
 #### Scenario: MCP раньше общего /api/
 - **WHEN** приходит `POST /api/mcp/` с заголовком `Authorization: Bearer wmcp_…`
 - **THEN** запрос уходит в wallet-mcp на тот же путь `/api/mcp/` с тем же заголовком, а не в wallet-api
@@ -43,6 +47,14 @@ JWT-гейт с указанным адресатом `aud`:
 #### Scenario: Синхронизация
 - **WHEN** приходит `POST /sync/push`
 - **THEN** запрос уходит в wallet-api
+
+### Requirement: Путь без изменений
+Путь, query и тело SHALL уходить апстриму без изменений. Контракты путей — в
+`openapi.yaml` соответствующего апстрима.
+
+#### Scenario: Query сохраняется
+- **WHEN** приходит `GET /api/reports/accounts?from=2026-01-01`
+- **THEN** wallet-report получает тот же путь и тот же query
 
 ### Requirement: Маршруты входа и статики
 Пути `/auth/` и `/admin/` SHALL уходить в google-auth (`AUTH_SERVICE_URL`), а
@@ -128,17 +140,20 @@ cpp-httplib.
 - **THEN** гейтвей стартует, остальные маршруты работают, а в журнале нет ошибки про `WALLET_DOCS_URL`
 
 ### Requirement: Недоступный апстрим
-Гейтвей SHALL ждать соединения с апстримом до 10 с и ответа до 30 с, а ответа
-wallet-docs (`/api/docs/*`) — до `WALLET_DOCS_READ_TIMEOUT_SEC` секунд (по умолчанию
-130). Неверное значение переменной (не целое положительное число) SHALL останавливать
-старт с ошибкой в журнале и кодом `1`. Если соединиться или получить ответ не удалось,
-клиент получает `502` с телом `gateway: сервис недоступен` (`text/plain;
-charset=utf-8`), а в журнал пишется ошибка `upstream <адрес> недоступен (<причина>) для
+Если соединиться с апстримом или получить ответ не удалось, клиент SHALL получать
+`502` с телом `gateway: сервис недоступен` (`text/plain; charset=utf-8`), а в
+журнал SHALL писаться ошибка `upstream <адрес> недоступен (<причина>) для
 <МЕТОД> <путь>`.
 
 #### Scenario: Апстрим остановлен
 - **WHEN** wallet-report остановлен, а приходит запрос с действительным токеном на `GET /api/reports/accounts`
 - **THEN** ответ — `502` с телом `gateway: сервис недоступен`
+
+### Requirement: Таймауты апстрима
+Гейтвей SHALL ждать соединения с апстримом до 10 с и ответа до 30 с, а ответа
+wallet-docs (`/api/docs/*`) — до `WALLET_DOCS_READ_TIMEOUT_SEC` секунд (по умолчанию
+130). Неверное значение переменной (не целое положительное число) SHALL останавливать
+старт с ошибкой в журнале и кодом `1`.
 
 #### Scenario: Long-poll в пределах таймаута
 - **WHEN** приходит `GET /api/ai/jobs/{id}?wait=25`, и wallet-ai отвечает через 25 с
