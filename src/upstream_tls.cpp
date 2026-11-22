@@ -1,5 +1,6 @@
 #include "upstream_tls.hpp"
 
+#include <cstdlib>
 #include <map>
 #include <mutex>
 
@@ -11,6 +12,19 @@ nettls::Config g_cfg;
 std::string g_plain_origin;
 std::mutex g_pools_mu;
 std::map<std::string, std::unique_ptr<nettls::ClientPool>> g_pools;
+
+// Предел одновременных соединений к одному апстриму (UPSTREAM_POOL_SIZE, по умолчанию 24). Меньше числа
+// потоков серверов-апстримов (httplib: от 11 до 44 на 12 ядрах), чтобы каждое соединение пула имело свой
+// поток, а лишние запросы ждали в пуле гейтвея по очереди, а не копились свежими рукопожатиями на
+// стороне сервера (замер add-internal-mtls, 10.2: 2–3 % SSL connection failed под нагрузкой).
+std::size_t pool_limit() {
+    const char* v = std::getenv("UPSTREAM_POOL_SIZE");
+    if (v && *v) {
+        const long n = std::strtol(v, nullptr, 10);
+        if (n >= 1 && n <= 512) return static_cast<std::size_t>(n);
+    }
+    return 24;
+}
 
 std::string trimmed(std::string url) {
     while (!url.empty() && url.back() == '/') url.pop_back();
@@ -34,7 +48,11 @@ nettls::ClientPool* pool_for(const std::string& base_url, int read_timeout_sec) 
     std::lock_guard<std::mutex> lock(g_pools_mu);
     auto it = g_pools.find(key);
     if (it == g_pools.end()) {
-        it = g_pools.emplace(key, std::make_unique<nettls::ClientPool>(trimmed(base_url), g_cfg, 10, read_timeout_sec)).first;
+        // Ждать свободного клиента не дольше, чем читать ответ (как при обычном HTTP без пула).
+        it = g_pools
+                 .emplace(key, std::make_unique<nettls::ClientPool>(trimmed(base_url), g_cfg, 10, read_timeout_sec,
+                                                                    pool_limit(), pool_limit(), read_timeout_sec))
+                 .first;
     }
     return it->second.get();
 }
