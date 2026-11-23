@@ -57,6 +57,8 @@ x-gated-proxy-operation: &gatedProxy
         проверяются здесь).
       content:
         text/plain: {schema: {type: string}}
+    "413":
+      description: Тело запроса больше 10 МБ (предел гейтвея) — тело не читается, апстрим не вызывается
     "502":
       description: Апстрим недоступен или не ответил за 10с (connect)/30с (read)
       content:
@@ -70,6 +72,8 @@ x-gated-proxy-operation: &gatedProxy
 x-open-proxy-operation: &openProxy
   security: []
   responses:
+    "413":
+      description: Тело запроса больше 10 МБ (предел гейтвея) — тело не читается, апстрим не вызывается
     "502":
       description: Апстрим недоступен или не ответил за 10с (connect)/30с (read)
       content:
