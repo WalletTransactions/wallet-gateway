@@ -733,6 +733,13 @@ int main() {
         const std::size_t n = CPPHTTPLIB_THREAD_POOL_COUNT + static_cast<std::size_t>(state.streams_max);
         svr.new_task_queue = [n] { return new httplib::ThreadPool(n, n * 4); };
     }
+    // Предел тела запроса: дефолт httplib — 100 МБ, а тело буферизуется целиком
+    // и копируется в запрос к апстриму, при mem_limit контейнера 64 МБ. Маршруты
+    // без JWT-гейта (/auth/*, /admin/*, статика) читают тело и без токена —
+    // несколько больших POST'ов убивали бы гейтвей по OOM. 10 МБ — с запасом
+    // над самым большим легитимным телом: выписка в wallet-ai (до 8 МБ, его
+    // собственный set_payload_max_length). Больше — 413 до чтения тела.
+    svr.set_payload_max_length(10u * 1024 * 1024);
     // pre_routing_handler — ТОЛЬКО грубый JWT-гейт, отвечает сам (Handled)
     // лишь при 401; иначе Unhandled — пропускает запрос дальше, в один из
     // catch-all Get/Post/.../handler'ов ниже (паттерн ".*" матчит любой
